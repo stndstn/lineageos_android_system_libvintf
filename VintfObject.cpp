@@ -542,25 +542,39 @@ std::shared_ptr<const RuntimeInfo> VintfObject::getRuntimeInfo(RuntimeInfo::Fetc
         mDeviceRuntimeInfo.object = getRuntimeInfoFactory()->make_shared();
     }
 
-    // Fetch kernel FCM version from device HAL manifest and store it in RuntimeInfo too.
-    if ((flags & RuntimeInfo::FetchFlag::KERNEL_FCM) != 0) {
-        auto manifest = getDeviceHalManifest();
-        if (!manifest) {
-            mDeviceRuntimeInfo.fetchedFlags &= ~RuntimeInfo::FetchFlag::KERNEL_FCM;
-            return nullptr;
-        }
-        Level level = Level::UNSPECIFIED;
-        if (manifest->kernel().has_value()) {
-            level = manifest->kernel()->level();
-        }
-        mDeviceRuntimeInfo.object->setKernelLevel(level);
-        flags &= ~RuntimeInfo::FetchFlag::KERNEL_FCM;
-    }
-
     status_t status = mDeviceRuntimeInfo.object->fetchAllInformation(flags);
     if (status != OK) {
-        mDeviceRuntimeInfo.fetchedFlags &= (~flags);  // mark the fields as "not fetched"
-        return nullptr;
+        // If only kernel FCM is needed, ignore errors when fetching RuntimeInfo because RuntimeInfo
+        // is not available on host. On host, the kernel level can still be inferred from device
+        // manifest.
+        // If other information is needed, flag the error by returning nullptr.
+        auto allExceptKernelFcm = RuntimeInfo::FetchFlag::ALL & ~RuntimeInfo::FetchFlag::KERNEL_FCM;
+        bool needDeviceRuntimeInfo = flags & allExceptKernelFcm;
+        if (needDeviceRuntimeInfo) {
+            mDeviceRuntimeInfo.fetchedFlags &= (~flags);  // mark the fields as "not fetched"
+            return nullptr;
+        }
+    }
+
+    // To support devices without GKI, RuntimeInfo::fetchAllInformation does not report errors
+    // if kernel level cannot be retrieved. If so, fetch kernel FCM version from device HAL
+    // manifest and store it in RuntimeInfo too.
+    if (flags & RuntimeInfo::FetchFlag::KERNEL_FCM) {
+        Level deviceManifestKernelLevel = Level::UNSPECIFIED;
+        auto manifest = getDeviceHalManifest();
+        if (manifest) {
+            deviceManifestKernelLevel = manifest->inferredKernelLevel();
+        }
+        if (deviceManifestKernelLevel != Level::UNSPECIFIED) {
+            Level kernelLevel = mDeviceRuntimeInfo.object->kernelLevel();
+            if (kernelLevel == Level::UNSPECIFIED) {
+                mDeviceRuntimeInfo.object->setKernelLevel(deviceManifestKernelLevel);
+            } else if (kernelLevel != deviceManifestKernelLevel) {
+                LOG(WARNING) << "uname() reports kernel level " << kernelLevel
+                             << " but device manifest sets kernel level "
+                             << deviceManifestKernelLevel << ". Using kernel level " << kernelLevel;
+            }
+        }
     }
 
     mDeviceRuntimeInfo.fetchedFlags |= flags;
@@ -930,15 +944,17 @@ int32_t VintfObject::checkDeprecation(const std::vector<HidlInterfaceMetadata>& 
 }
 
 Level VintfObject::getKernelLevel(std::string* error) {
-    auto manifest = getDeviceHalManifest();
-    if (!manifest) {
-        if (error) *error = "Cannot retrieve device manifest.";
+    auto runtimeInfo = getRuntimeInfo(RuntimeInfo::FetchFlag::KERNEL_FCM);
+    if (!runtimeInfo) {
+        if (error) *error = "Cannot retrieve runtime info with kernel level.";
         return Level::UNSPECIFIED;
     }
-    if (manifest->kernel().has_value() && manifest->kernel()->level() != Level::UNSPECIFIED) {
-        return manifest->kernel()->level();
+    if (runtimeInfo->kernelLevel() != Level::UNSPECIFIED) {
+        return runtimeInfo->kernelLevel();
     }
-    if (error) *error = "Device manifest does not specify kernel FCM version.";
+    if (error) {
+        *error = "Both device manifest and kernel release do not specify kernel FCM version.";
+    }
     return Level::UNSPECIFIED;
 }
 
