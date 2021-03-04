@@ -222,7 +222,7 @@ class VintfObject {
     android::base::Result<void> checkUnusedHals(
         const std::vector<HidlInterfaceMetadata>& hidlMetadata);
 
-    // Check that all HALs are added to the any framework compatibility matrix.
+    // Check that all HALs are added to any framework compatibility matrix.
     // If shouldCheck is set, only check if:
     // - For HIDL, shouldCheck(packageAndVersion) (e.g. android.hardware.foo@1.0)
     // - For AIDL and native, shouldCheck(package) (e.g. android.hardware.foo)
@@ -230,6 +230,12 @@ class VintfObject {
         const std::vector<HidlInterfaceMetadata>& hidlMetadata,
         const std::vector<AidlInterfaceMetadata>& aidlMetadata,
         std::function<bool(const std::string&)> shouldCheck = {});
+
+    // Check that all HALs in all framework compatibility matrices have the
+    // proper interface definition (HIDL / AIDL files).
+    android::base::Result<void> checkMatrixHalsHasDefinition(
+        const std::vector<HidlInterfaceMetadata>& hidlMetadata,
+        const std::vector<AidlInterfaceMetadata>& aidlMetadata);
 
    private:
     std::unique_ptr<FileSystem> mFileSystem;
@@ -325,6 +331,10 @@ class VintfObject {
     status_t fetchUnfilteredFrameworkHalManifest(HalManifest* out, std::string* error);
     void filterHalsByDeviceManifestLevel(HalManifest* out);
 
+    // Helper for checking matrices against lib*idlmetadata. Wrapper of the other variant of
+    // getAllFrameworkMatrixLevels. Treat empty output as an error.
+    android::base::Result<std::vector<CompatibilityMatrix>> getAllFrameworkMatrixLevels();
+
     using ChildrenMap = std::multimap<std::string, std::string>;
     static bool IsHalDeprecated(const MatrixHal& oldMatrixHal,
                                 const CompatibilityMatrix& targetMatrix,
@@ -378,30 +388,6 @@ enum : int32_t {
 
 // exposed for testing.
 namespace details {
-
-extern const std::string kSystemVintfDir;
-extern const std::string kVendorVintfDir;
-extern const std::string kOdmVintfDir;
-extern const std::string kProductVintfDir;
-extern const std::string kSystemExtVintfDir;
-extern const std::string kOdmLegacyVintfDir;
-extern const std::string kOdmLegacyManifest;
-extern const std::string kVendorManifest;
-extern const std::string kSystemManifest;
-extern const std::string kVendorMatrix;
-extern const std::string kOdmManifest;
-extern const std::string kProductMatrix;
-extern const std::string kProductManifest;
-extern const std::string kSystemExtManifest;
-extern const std::string kVendorManifestFragmentDir;
-extern const std::string kSystemManifestFragmentDir;
-extern const std::string kOdmManifestFragmentDir;
-extern const std::string kProductManifestFragmentDir;
-extern const std::string kSystemExtManifestFragmentDir;
-extern const std::string kVendorLegacyManifest;
-extern const std::string kVendorLegacyMatrix;
-extern const std::string kSystemLegacyManifest;
-extern const std::string kSystemLegacyMatrix;
 
 // Convenience function to dump all files and directories that could be read
 // by calling Get(Framework|Device)(HalManifest|CompatibilityMatrix). The list
