@@ -120,8 +120,7 @@ Level CompatibilityMatrix::level() const {
 
 status_t CompatibilityMatrix::fetchAllInformation(const FileSystem* fileSystem,
                                                   const std::string& path, std::string* error) {
-    return details::fetchAllInformation(fileSystem, path, gCompatibilityMatrixConverter, this,
-                                        error);
+    return details::fetchAllInformation(fileSystem, path, this, error);
 }
 
 std::string CompatibilityMatrix::getXmlSchemaPath(const std::string& xmlFileName,
@@ -459,6 +458,11 @@ bool CompatibilityMatrix::matchInstance(HalFormat format, const std::string& hal
                                          return !found;  // if not found, continue
                                      });
     return found;
+}
+
+std::vector<VersionRange> CompatibilityMatrix::getSepolicyVersions() const {
+    if (type() == SchemaType::FRAMEWORK) return framework.mSepolicy.sepolicyVersions();
+    return {};
 }
 
 std::string CompatibilityMatrix::getVendorNdkVersion() const {
