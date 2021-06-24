@@ -18,10 +18,10 @@
 #include "gmock-logging-compat.h"
 
 #include <stdio.h>
-#include <unistd.h>
 
 #include <android-base/file.h>
 #include <android-base/logging.h>
+#include <android-base/result-gmock.h>
 #include <android-base/stringprintf.h>
 #include <android-base/strings.h>
 #include <gtest/gtest.h>
@@ -31,6 +31,7 @@
 #include <vintf/parse_string.h>
 #include <vintf/parse_xml.h>
 #include "constants-private.h"
+#include "parse_xml_internal.h"
 #include "test_constants.h"
 #include "utils-fake.h"
 
@@ -38,19 +39,15 @@ using namespace ::testing;
 using namespace std::literals;
 
 using android::FqInstance;
+using android::base::testing::HasError;
+using android::base::testing::Ok;
+using android::base::testing::WithMessage;
 
-static AssertionResult In(const std::string& sub, const std::string& str) {
-    return (str.find(sub) != std::string::npos ? AssertionSuccess() : AssertionFailure())
-           << "Value is " << str;
-}
-#define EXPECT_IN(sub, str) EXPECT_TRUE(In((sub), (str)))
-#define EXPECT_NOT_IN(sub, str) EXPECT_FALSE(In((sub), (str)))
+#define EXPECT_IN(sub, str) EXPECT_THAT(str, HasSubstr(sub))
+#define EXPECT_NOT_IN(sub, str) EXPECT_THAT(str, Not(HasSubstr(sub)))
 
 namespace android {
 namespace vintf {
-
-extern XmlConverter<KernelInfo>& gKernelInfoConverter;
-
 namespace testing {
 
 using namespace ::android::vintf::details;
@@ -715,7 +712,7 @@ TEST_F(VintfObjectTest, ProductCompatibilityMatrix) {
         return !found;  // continue if not found
     });
     EXPECT_TRUE(found) << "android.hardware.foo@1.0::IFoo/default should be found in matrix:\n"
-                       << gCompatibilityMatrixConverter(*fcm);
+                       << toXml(*fcm);
 }
 
 const std::string vendorEtcManifest =
@@ -1150,7 +1147,7 @@ TEST_F(RegexTest, CombineLevel1) {
     expectTargetFcmVersion(1);
     auto matrix = vintfObject->getFrameworkCompatibilityMatrix();
     ASSERT_NE(nullptr, matrix);
-    std::string xml = gCompatibilityMatrixConverter(*matrix);
+    std::string xml = toXml(*matrix);
 
     EXPECT_IN(
         "    <hal format=\"hidl\" optional=\"false\">\n"
@@ -1205,7 +1202,7 @@ TEST_F(RegexTest, CombineLevel2) {
     expectTargetFcmVersion(2);
     auto matrix = vintfObject->getFrameworkCompatibilityMatrix();
     ASSERT_NE(nullptr, matrix);
-    std::string xml = gCompatibilityMatrixConverter(*matrix);
+    std::string xml = toXml(*matrix);
 
     EXPECT_IN(
         "    <hal format=\"hidl\" optional=\"false\">\n"
@@ -1372,7 +1369,7 @@ TEST_F(KernelTest, Level1AndLevel2) {
     expectTargetFcmVersion(1);
     auto matrix = vintfObject->getFrameworkCompatibilityMatrix();
     ASSERT_NE(nullptr, matrix);
-    std::string xml = gCompatibilityMatrixConverter(*matrix);
+    std::string xml = toXml(*matrix);
 
     EXPECT_IN(FAKE_KERNEL("1.0.0", "A1", 1), xml) << "\nOld requirements must not change.";
     EXPECT_IN(FAKE_KERNEL("2.0.0", "B1", 1), xml) << "\nOld requirements must not change.";
@@ -1390,7 +1387,7 @@ TEST_F(KernelTest, Level1AndMore) {
     expectTargetFcmVersion(1);
     auto matrix = vintfObject->getFrameworkCompatibilityMatrix();
     ASSERT_NE(nullptr, matrix);
-    std::string xml = gCompatibilityMatrixConverter(*matrix);
+    std::string xml = toXml(*matrix);
 
     EXPECT_IN(FAKE_KERNEL("1.0.0", "A1", 1), xml) << "\nOld requirements must not change.";
     EXPECT_IN(FAKE_KERNEL("2.0.0", "B1", 1), xml) << "\nOld requirements must not change.";
@@ -1404,7 +1401,7 @@ TEST_F(KernelTest, Level1AndMore) {
 
 KernelInfo MakeKernelInfo(const std::string& version, const std::string& key) {
     KernelInfo info;
-    CHECK(gKernelInfoConverter(&info,
+    CHECK(fromXml(&info,
                                "    <kernel version=\"" + version + "\">\n"
                                "        <config>\n"
                                "            <key>CONFIG_" + key + "</key>\n"
@@ -1460,9 +1457,8 @@ TEST_P(KernelTestP, Test) {
     auto runtime = vintfObject->getRuntimeInfo();
     ASSERT_NE(nullptr, matrix);
     ASSERT_NE(nullptr, runtime);
-    std::string fallbackError = kernelFcm == Level::UNSPECIFIED
-        ? "\nOld requirements must not change"
-        : "\nMust not pull unnecessary requirements from new matrices";
+    std::string fallbackError = "Matrix is compatible with kernel info, but it shouldn't. Matrix:\n"
+        + toXml(*matrix) + "\nKernelInfo:\n" + toXml(info);
     std::string error;
     ASSERT_EQ(pass, runtime->checkCompatibility(*matrix, &error))
             << (pass ? error : fallbackError);
@@ -1483,6 +1479,11 @@ std::vector<KernelTestP::ParamType> KernelTestParamValues() {
     ret.emplace_back(matrices, MakeKernelInfo("3.0.0", "C2"), Level{1}, Level{1}, false);
     ret.emplace_back(matrices, MakeKernelInfo("4.0.0", "D2"), Level{1}, Level{1}, false);
     ret.emplace_back(matrices, MakeKernelInfo("2.0.0", "B2"), Level{1}, Level{1}, true);
+
+    // Kernel FCM lower than target FCM
+    ret.emplace_back(matrices, MakeKernelInfo("1.0.0", "A1"), Level{2}, Level{1}, true);
+    ret.emplace_back(matrices, MakeKernelInfo("2.0.0", "B1"), Level{2}, Level{1}, true);
+    ret.emplace_back(matrices, MakeKernelInfo("2.0.0", "B2"), Level{2}, Level{1}, true);
 
     matrices = systemMatrixKernelXmls;
     ret.emplace_back(matrices, MakeKernelInfo("1.0.0", "A1"), Level{1}, Level::UNSPECIFIED, true);
@@ -1518,6 +1519,25 @@ std::vector<KernelTestP::ParamType> KernelTestParamValues() {
     ret.emplace_back(matrices, MakeKernelInfo("6.0.0", "F4"), Level{3}, Level{3}, false);
     ret.emplace_back(matrices, MakeKernelInfo("6.0.0", "F4"), Level{4}, Level{4}, true);
     ret.emplace_back(matrices, MakeKernelInfo("6.0.0", "F4"), Level{5}, Level{5}, false);
+
+    // Kernel FCM lower than target FCM
+    ret.emplace_back(matrices, MakeKernelInfo("1.0.0", "A1"), Level{2}, Level{1}, true);
+    ret.emplace_back(matrices, MakeKernelInfo("2.0.0", "B1"), Level{2}, Level{1}, true);
+    ret.emplace_back(matrices, MakeKernelInfo("2.0.0", "B2"), Level{2}, Level{1}, true);
+    ret.emplace_back(matrices, MakeKernelInfo("3.0.0", "C2"), Level{2}, Level{1}, false);
+    ret.emplace_back(matrices, MakeKernelInfo("3.0.0", "C3"), Level{2}, Level{1}, false);
+    ret.emplace_back(matrices, MakeKernelInfo("4.0.0", "D2"), Level{2}, Level{1}, false);
+    ret.emplace_back(matrices, MakeKernelInfo("4.0.0", "D3"), Level{2}, Level{1}, false);
+    ret.emplace_back(matrices, MakeKernelInfo("5.0.0", "E3"), Level{2}, Level{1}, false);
+    ret.emplace_back(matrices, MakeKernelInfo("5.0.0", "E4"), Level{2}, Level{1}, false);
+    ret.emplace_back(matrices, MakeKernelInfo("6.0.0", "F4"), Level{2}, Level{1}, false);
+    ret.emplace_back(matrices, MakeKernelInfo("6.0.0", "F5"), Level{2}, Level{1}, false);
+    ret.emplace_back(matrices, MakeKernelInfo("7.0.0", "G5"), Level{2}, Level{1}, false);
+
+    ret.emplace_back(matrices, MakeKernelInfo("6.0.0", "F4"), Level{3}, Level{2}, false);
+    ret.emplace_back(matrices, MakeKernelInfo("6.0.0", "F4"), Level{4}, Level{3}, false);
+    ret.emplace_back(matrices, MakeKernelInfo("6.0.0", "F4"), Level{5}, Level{4}, true);
+    // We don't have device FCM 6 in systemMatrixKernelXmls, skip
 
     return ret;
 }
@@ -1872,35 +1892,6 @@ INSTANTIATE_TEST_SUITE_P(OemFcmLevel, OemFcmLevelTest, Combine(Values(1, 2), Boo
     OemFcmLevelTestParamToString);
 // clang-format on
 
-// A matcher that checks if a Result object contains an error message, and the error message
-// contains the given substring.
-class ErrorMessageMatcher {
-   public:
-    ErrorMessageMatcher(const std::string& message) : mMessage(message) {}
-    template <class T>
-    bool MatchAndExplain(const android::base::Result<T>& result,
-                         MatchResultListener* listener) const {
-        if (result.ok()) {
-            *listener << "result is ok";
-            return false;
-        }
-        *listener << "result has error message \"" << result.error().message() << "\"";
-        return result.error().message().find(mMessage) != std::string::npos;
-    }
-    void DescribeTo(std::ostream* os) const {
-        *os << "error message contains \"" << mMessage << "\"";
-    }
-    void DescribeNegationTo(std::ostream* os) const {
-        *os << "error message does not contain \"" << mMessage << "\"";
-    }
-
-   private:
-    std::string mMessage;
-};
-PolymorphicMatcher<ErrorMessageMatcher> HasErrorMessage(const std::string& message) {
-    return MakePolymorphicMatcher(ErrorMessageMatcher(message));
-}
-
 // Common test set up for checking matrices against lib*idlmetadata.
 class CheckMatricesWithHalDefTestBase : public MultiMatrixTest {
     void SetUp() override {
@@ -1936,15 +1927,15 @@ class CheckMatricesWithHalDefTestBase : public MultiMatrixTest {
 class CheckMissingHalsTest : public CheckMatricesWithHalDefTestBase {};
 
 TEST_F(CheckMissingHalsTest, Empty) {
-    EXPECT_RESULT_OK(vintfObject->checkMissingHalsInMatrices({}, {}));
+    EXPECT_THAT(vintfObject->checkMissingHalsInMatrices({}, {}), Ok());
 }
 
 TEST_F(CheckMissingHalsTest, Pass) {
     std::vector<HidlInterfaceMetadata> hidl{{.name = "android.hardware.hidl@1.0::IHidl"}};
     std::vector<AidlInterfaceMetadata> aidl{{.types = {"android.hardware.aidl.IAidl"}}};
-    EXPECT_RESULT_OK(vintfObject->checkMissingHalsInMatrices(hidl, {}));
-    EXPECT_RESULT_OK(vintfObject->checkMissingHalsInMatrices({}, aidl));
-    EXPECT_RESULT_OK(vintfObject->checkMissingHalsInMatrices(hidl, aidl));
+    EXPECT_THAT(vintfObject->checkMissingHalsInMatrices(hidl, {}), Ok());
+    EXPECT_THAT(vintfObject->checkMissingHalsInMatrices({}, aidl), Ok());
+    EXPECT_THAT(vintfObject->checkMissingHalsInMatrices(hidl, aidl), Ok());
 }
 
 TEST_F(CheckMissingHalsTest, FailVendor) {
@@ -1952,21 +1943,21 @@ TEST_F(CheckMissingHalsTest, FailVendor) {
     std::vector<AidlInterfaceMetadata> aidl{{.types = {"vendor.foo.aidl.IAidl"}}};
 
     auto res = vintfObject->checkMissingHalsInMatrices(hidl, {});
-    EXPECT_THAT(res, HasErrorMessage("vendor.foo.hidl@1.0"));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("vendor.foo.hidl@1.0"))));
 
     res = vintfObject->checkMissingHalsInMatrices({}, aidl);
-    EXPECT_THAT(res, HasErrorMessage("vendor.foo.aidl"));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("vendor.foo.aidl"))));
 
     res = vintfObject->checkMissingHalsInMatrices(hidl, aidl);
-    EXPECT_THAT(res, HasErrorMessage("vendor.foo.hidl@1.0"));
-    EXPECT_THAT(res, HasErrorMessage("vendor.foo.aidl"));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("vendor.foo.hidl@1.0"))));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("vendor.foo.aidl"))));
 
     auto predicate = [](const auto& interfaceName) {
         return android::base::StartsWith(interfaceName, "android.hardware");
     };
-    EXPECT_RESULT_OK(vintfObject->checkMissingHalsInMatrices(hidl, {}, predicate));
-    EXPECT_RESULT_OK(vintfObject->checkMissingHalsInMatrices({}, aidl, predicate));
-    EXPECT_RESULT_OK(vintfObject->checkMissingHalsInMatrices(hidl, aidl, predicate));
+    EXPECT_THAT(vintfObject->checkMissingHalsInMatrices(hidl, {}, predicate), Ok());
+    EXPECT_THAT(vintfObject->checkMissingHalsInMatrices({}, aidl, predicate), Ok());
+    EXPECT_THAT(vintfObject->checkMissingHalsInMatrices(hidl, aidl, predicate), Ok());
 }
 
 TEST_F(CheckMissingHalsTest, FailVersion) {
@@ -1974,28 +1965,28 @@ TEST_F(CheckMissingHalsTest, FailVersion) {
     std::vector<AidlInterfaceMetadata> aidl{{.types = {"android.hardware.aidl2.IAidl"}}};
 
     auto res = vintfObject->checkMissingHalsInMatrices(hidl, {});
-    EXPECT_THAT(res, HasErrorMessage("android.hardware.hidl@2.0"));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("android.hardware.hidl@2.0"))));
 
     res = vintfObject->checkMissingHalsInMatrices({}, aidl);
-    EXPECT_THAT(res, HasErrorMessage("android.hardware.aidl2"));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("android.hardware.aidl2"))));
 
     res = vintfObject->checkMissingHalsInMatrices(hidl, aidl);
-    EXPECT_THAT(res, HasErrorMessage("android.hardware.hidl@2.0"));
-    EXPECT_THAT(res, HasErrorMessage("android.hardware.aidl2"));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("android.hardware.hidl@2.0"))));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("android.hardware.aidl2"))));
 
     auto predicate = [](const auto& interfaceName) {
         return android::base::StartsWith(interfaceName, "android.hardware");
     };
 
     res = vintfObject->checkMissingHalsInMatrices(hidl, {}, predicate);
-    EXPECT_THAT(res, HasErrorMessage("android.hardware.hidl@2.0"));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("android.hardware.hidl@2.0"))));
 
     res = vintfObject->checkMissingHalsInMatrices({}, aidl, predicate);
-    EXPECT_THAT(res, HasErrorMessage("android.hardware.aidl2"));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("android.hardware.aidl2"))));
 
     res = vintfObject->checkMissingHalsInMatrices(hidl, aidl, predicate);
-    EXPECT_THAT(res, HasErrorMessage("android.hardware.hidl@2.0"));
-    EXPECT_THAT(res, HasErrorMessage("android.hardware.aidl2"));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("android.hardware.hidl@2.0"))));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("android.hardware.aidl2"))));
 }
 
 // A set of tests on VintfObject::checkMatrixHalsHasDefinition
@@ -2004,25 +1995,25 @@ class CheckMatrixHalsHasDefinitionTest : public CheckMatricesWithHalDefTestBase 
 TEST_F(CheckMatrixHalsHasDefinitionTest, Pass) {
     std::vector<HidlInterfaceMetadata> hidl{{.name = "android.hardware.hidl@1.0::IHidl"}};
     std::vector<AidlInterfaceMetadata> aidl{{.types = {"android.hardware.aidl.IAidl"}}};
-    EXPECT_RESULT_OK(vintfObject->checkMatrixHalsHasDefinition(hidl, aidl));
+    EXPECT_THAT(vintfObject->checkMatrixHalsHasDefinition(hidl, aidl), Ok());
 }
 
 TEST_F(CheckMatrixHalsHasDefinitionTest, FailMissingHidl) {
     std::vector<AidlInterfaceMetadata> aidl{{.types = {"android.hardware.aidl.IAidl"}}};
     auto res = vintfObject->checkMatrixHalsHasDefinition({}, aidl);
-    EXPECT_THAT(res, HasErrorMessage("android.hardware.hidl@1.0::IHidl"));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("android.hardware.hidl@1.0::IHidl"))));
 }
 
 TEST_F(CheckMatrixHalsHasDefinitionTest, FailMissingAidl) {
     std::vector<HidlInterfaceMetadata> hidl{{.name = "android.hardware.hidl@1.0::IHidl"}};
     auto res = vintfObject->checkMatrixHalsHasDefinition(hidl, {});
-    EXPECT_THAT(res, HasErrorMessage("android.hardware.aidl.IAidl"));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("android.hardware.aidl.IAidl"))));
 }
 
 TEST_F(CheckMatrixHalsHasDefinitionTest, FailMissingBoth) {
     auto res = vintfObject->checkMatrixHalsHasDefinition({}, {});
-    EXPECT_THAT(res, HasErrorMessage("android.hardware.hidl@1.0::IHidl"));
-    EXPECT_THAT(res, HasErrorMessage("android.hardware.aidl.IAidl"));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("android.hardware.hidl@1.0::IHidl"))));
+    EXPECT_THAT(res, HasError(WithMessage(HasSubstr("android.hardware.aidl.IAidl"))));
 }
 
 }  // namespace testing

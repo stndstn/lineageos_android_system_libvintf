@@ -151,8 +151,7 @@ struct StaticRuntimeInfoFactory : public ObjectFactory<RuntimeInfo> {
 
 // helper functions
 template <typename T>
-std::unique_ptr<T> readObject(FileSystem* fileSystem, const std::string& path,
-                              const XmlConverter<T>& converter) {
+std::unique_ptr<T> readObject(FileSystem* fileSystem, const std::string& path) {
     std::string xml;
     std::string error;
     status_t err = fileSystem->fetch(path, &xml, &error);
@@ -162,7 +161,7 @@ std::unique_ptr<T> readObject(FileSystem* fileSystem, const std::string& path,
     }
     auto ret = std::make_unique<T>();
     ret->setFileName(path);
-    if (!converter(ret.get(), xml, &error)) {
+    if (!fromXml(ret.get(), xml, &error)) {
         LOG(ERROR) << "Cannot parse '" << path << "': " << error;
         return nullptr;
     }
@@ -171,8 +170,8 @@ std::unique_ptr<T> readObject(FileSystem* fileSystem, const std::string& path,
 
 int checkCompatibilityForFiles(const std::string& manifestPath, const std::string& matrixPath) {
     auto fileSystem = std::make_unique<FileSystemImpl>();
-    auto manifest = readObject(fileSystem.get(), manifestPath, gHalManifestConverter);
-    auto matrix = readObject(fileSystem.get(), matrixPath, gCompatibilityMatrixConverter);
+    auto manifest = readObject<HalManifest>(fileSystem.get(), manifestPath);
+    auto matrix = readObject<CompatibilityMatrix>(fileSystem.get(), matrixPath);
     if (manifest == nullptr || matrix == nullptr) {
         return -1;
     }
@@ -359,6 +358,11 @@ class CheckVintfUtils {
             LOG(WARNING) << "Unable to print HALs from new FCMs: no device HAL manifest.";
             return;
         }
+        std::string kernelLevelError;
+        auto kernelLevel = vintfObject->getKernelLevel(&kernelLevelError);
+        if (kernelLevel == Level::UNSPECIFIED) {
+            LOG(WARNING) << "getKernelLevel: " << kernelLevel;
+        }
         std::vector<CompatibilityMatrix> matrixFragments;
         std::string error;
         auto status = vintfObject->getAllFrameworkMatrixLevels(&matrixFragments, &error);
@@ -373,8 +377,8 @@ class CheckVintfUtils {
                                             matrix.level() > deviceManifest->level();
                                  });
         matrixFragments.erase(it, matrixFragments.end());
-        auto combined =
-            CompatibilityMatrix::combine(deviceManifest->level(), &matrixFragments, &error);
+        auto combined = CompatibilityMatrix::combine(deviceManifest->level(), kernelLevel,
+                                                     &matrixFragments, &error);
         if (combined == nullptr) {
             LOG(WARNING) << "Unable to print HALs from new FCMs: unable to combine matrix "
                             "fragments <= level "

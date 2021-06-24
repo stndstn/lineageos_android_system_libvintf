@@ -30,7 +30,7 @@ namespace vintf {
 namespace {
 
 template <typename T>
-std::optional<T> readObject(const std::string& path, const XmlConverter<T>& converter) {
+std::optional<T> readObject(const std::string& path) {
     std::string xml;
     std::string error;
     status_t err = details::FileSystemImpl().fetch(path, &xml, &error);
@@ -39,7 +39,7 @@ std::optional<T> readObject(const std::string& path, const XmlConverter<T>& conv
         return std::nullopt;
     }
     auto ret = std::make_optional<T>();
-    if (!converter(&ret.value(), xml, &error)) {
+    if (!fromXml(&ret.value(), xml, &error)) {
         LOG(ERROR) << "Cannot parse '" << path << "': " << error;
         return std::nullopt;
     }
@@ -85,6 +85,8 @@ std::string GetDescription(Level level) {
             return "Android 11 (R)";
         case Level::S:
             return "Android 12 (S)";
+        case Level::T:
+            return "Android 13 (T)";
         case Level::UNSPECIFIED:
             return "Level unspecified";
         default:
@@ -112,7 +114,7 @@ int main(int argc, char** argv) {
 
     gflags::ParseCommandLineFlags(&argc, &argv, true /* remove flags */);
 
-    auto mat = readObject(FLAGS_input, gCompatibilityMatrixConverter);
+    auto mat = readObject<CompatibilityMatrix>(FLAGS_input);
     if (!mat) {
         return 1;
     }

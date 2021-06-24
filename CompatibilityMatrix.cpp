@@ -120,8 +120,7 @@ Level CompatibilityMatrix::level() const {
 
 status_t CompatibilityMatrix::fetchAllInformation(const FileSystem* fileSystem,
                                                   const std::string& path, std::string* error) {
-    return details::fetchAllInformation(fileSystem, path, gCompatibilityMatrixConverter, this,
-                                        error);
+    return details::fetchAllInformation(fileSystem, path, this, error);
 }
 
 std::string CompatibilityMatrix::getXmlSchemaPath(const std::string& xmlFileName,
@@ -335,7 +334,8 @@ bool operator==(const CompatibilityMatrix &lft, const CompatibilityMatrix &rgt) 
 }
 
 std::unique_ptr<CompatibilityMatrix> CompatibilityMatrix::combine(
-    Level deviceLevel, std::vector<CompatibilityMatrix>* matrices, std::string* error) {
+    Level deviceLevel, Level kernelLevel, std::vector<CompatibilityMatrix>* matrices,
+    std::string* error) {
     // Check type.
     for (const auto& e : *matrices) {
         if (e.type() != SchemaType::FRAMEWORK) {
@@ -364,12 +364,12 @@ std::unique_ptr<CompatibilityMatrix> CompatibilityMatrix::combine(
 
     std::vector<std::string> parsedFiles;
     for (auto& e : *matrices) {
-        if (e.level() < deviceLevel) {
-            continue;
-        }
-
         bool success = false;
-        if (e.level() == deviceLevel) {
+        if (e.level() < deviceLevel) {
+            if (kernelLevel == Level::UNSPECIFIED) continue;
+            if (e.level() < kernelLevel) continue;
+            success = baseMatrix->addAllKernels(&e, error);
+        } else if (e.level() == deviceLevel) {
             success = baseMatrix->addAll(&e, error);
         } else {
             success = baseMatrix->addAllAsOptional(&e, error);
@@ -459,6 +459,11 @@ bool CompatibilityMatrix::matchInstance(HalFormat format, const std::string& hal
                                          return !found;  // if not found, continue
                                      });
     return found;
+}
+
+std::vector<VersionRange> CompatibilityMatrix::getSepolicyVersions() const {
+    if (type() == SchemaType::FRAMEWORK) return framework.mSepolicy.sepolicyVersions();
+    return {};
 }
 
 std::string CompatibilityMatrix::getVendorNdkVersion() const {
