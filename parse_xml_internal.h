@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2017 The Android Open Source Project
+ * Copyright (C) 2021 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,22 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
-#ifndef ANDROID_VINTF_CONSTANTS_H
-#define ANDROID_VINTF_CONSTANTS_H
+#include <vintf/parse_xml.h>
 
-#include "Version.h"
-
-namespace android {
-namespace vintf {
-
-/* libvintf meta-version */
-constexpr Version kMetaVersion{4, 0};
-
-// Default version for an AIDL HAL if no version is specified.
-constexpr size_t kDefaultAidlMinorVersion = 1;
-
-}  // namespace vintf
-}  // namespace android
-
-#endif  // ANDROID_VINTF_CONSTANTS_H
+namespace android::vintf {
+std::string toXml(const KernelInfo& o, SerializeFlags::Type flags = SerializeFlags::EVERYTHING);
+[[nodiscard]] bool fromXml(KernelInfo* o, const std::string& xml, std::string* error = nullptr);
+}  // namespace android::vintf
