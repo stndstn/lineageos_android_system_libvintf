@@ -110,17 +110,11 @@ cc_library {
         host: {
             srcs: [
                 "RuntimeInfo-host.cpp",
-                "VintfObjectRecovery.cpp",
             ],
         },
         android: {
             srcs: [
                 "RuntimeInfo-target.cpp",
-            ],
-        },
-        recovery: {
-            srcs: [
-                "VintfObjectRecovery.cpp",
             ],
         },
     }
