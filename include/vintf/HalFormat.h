@@ -32,7 +32,7 @@ enum class HalFormat : size_t {
 };
 
 // clang-format off
-static constexpr std::array<const char*, 3> gHalFormatStrings = {
+static const std::array<std::string, 3> gHalFormatStrings = {
     "hidl",
     "native",
     "aidl"

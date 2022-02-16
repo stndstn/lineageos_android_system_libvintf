@@ -31,7 +31,6 @@
 #include <vintf/KernelConfigParser.h>
 #include <vintf/parse_string.h>
 #include <vintf/parse_xml.h>
-#include "constants-private.h"
 #include "utils.h"
 
 #define BUFFER_SIZE sysconf(_SC_PAGESIZE)
@@ -346,19 +345,7 @@ class AssembleVintfImpl : public AssembleVintf {
             std::cerr << error << "\n";
             return false;
         }
-        return true;
-    }
 
-    bool checkDeviceManifestNoKernelLevel(const HalManifest& manifest) {
-        if (manifest.level() != Level::UNSPECIFIED &&
-            manifest.level() >= details::kEnforceDeviceManifestNoKernelLevel &&
-            // Use manifest.kernel()->level() directly because inferredKernelLevel()
-            // reads manifest.level().
-            manifest.kernel().has_value() && manifest.kernel()->level() != Level::UNSPECIFIED) {
-            std::cerr << "Error: Device manifest with level " << manifest.level()
-                      << " must not set kernel level " << manifest.kernel()->level() << std::endl;
-            return false;
-        }
         return true;
     }
 
@@ -398,10 +385,6 @@ class AssembleVintfImpl : public AssembleVintf {
             }
 
             if (!setDeviceManifestKernel(halManifest)) {
-                return false;
-            }
-
-            if (!checkDeviceManifestNoKernelLevel(*halManifest)) {
                 return false;
             }
         }
@@ -585,9 +568,7 @@ class AssembleVintfImpl : public AssembleVintf {
                               << std::endl;
                 }
             }
-            // No <kernel> tags to assemble at this point
-            const auto kernelLevel = Level::UNSPECIFIED;
-            builtMatrix = CompatibilityMatrix::combine(deviceLevel, kernelLevel, matrices, &error);
+            builtMatrix = CompatibilityMatrix::combine(deviceLevel, matrices, &error);
             matrix = builtMatrix.get();
 
             if (matrix == nullptr) {
