@@ -18,8 +18,6 @@
 #ifndef ANDROID_VINTF_TRANSPORT_ARCH_H
 #define ANDROID_VINTF_TRANSPORT_ARCH_H
 
-#include <optional>
-
 #include "Arch.h"
 #include "Transport.h"
 
@@ -29,8 +27,6 @@ namespace vintf {
 struct TransportArch {
     Transport transport = Transport::EMPTY;
     Arch arch = Arch::ARCH_EMPTY;
-    std::optional<std::string> ip;
-    std::optional<uint64_t> port;
 
     TransportArch() = default;
     TransportArch(Transport t, Arch a) : transport(t), arch(a) {}
@@ -55,8 +51,6 @@ struct TransportArch {
     // <transport arch="64">passthrough</transport>
     // <transport arch="32+64">passthrough</transport>
     // <transport>hwbinder</transport>
-    // "ip" and "port" can be any string and uint64_t value respectively
-    // <transport ip="1.2.3.4" port="1234">inet</transport>
     // Element doesn't exist
     bool isValid(std::string* error = nullptr) const;
 };
