@@ -34,30 +34,20 @@ bool TransportArch::isValid(std::string* error) const {
     switch (transport) {
         case Transport::EMPTY: // fallthrough
         case Transport::HWBINDER:
-            if (arch == Arch::ARCH_EMPTY && !ip.has_value() && !port.has_value()) {
+            if (arch == Arch::ARCH_EMPTY) {
                 return true;
             }
             if (error) {
-                *error += "Transport " + to_string(transport) +
-                          " requires empty ip and port attributes as well as empty arch attribute";
+                *error += "Transport " + to_string(transport) + " requires empty arch attribute";
             }
             return false;
 
         case Transport::PASSTHROUGH:
-            if (arch != Arch::ARCH_EMPTY && !ip.has_value() && !port.has_value()) {
+            if (arch != Arch::ARCH_EMPTY) {
                 return true;
             }
             if (error) {
-                *error += "Passthrough HALs requires arch attribute and no ip or port attributes";
-            }
-            return false;
-        case Transport::INET:
-            if (arch == Arch::ARCH_EMPTY && ip.has_value() && port.has_value()) {
-                return true;
-            }
-            if (error) {
-                *error += "Transport " + to_string(transport) +
-                          " requires ip and port attributes as well as empty arch attribute";
+                *error += "Passthrough HALs requires arch attribute";
             }
             return false;
     }
