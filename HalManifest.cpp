@@ -184,7 +184,7 @@ std::set<std::string> HalManifest::getHalNamesAndVersions() const {
                 names.insert(toFQNameString(e.package(), e.version()));
                 break;
             case HalFormat::AIDL:
-                names.insert(e.package() + "@" + aidlVersionToString(e.version()));
+                names.insert(e.package());
                 break;
         }
         return true;
