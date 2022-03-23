@@ -29,7 +29,7 @@ enum class SchemaType : size_t {
     FRAMEWORK,
 };
 
-static constexpr std::array<const char*, 2> gSchemaTypeStrings = {
+static const std::array<std::string, 2> gSchemaTypeStrings = {
     {
         "device",
         "framework",
