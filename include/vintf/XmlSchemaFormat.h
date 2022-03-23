@@ -28,7 +28,7 @@ enum XmlSchemaFormat {
     XSD,
 };
 
-static constexpr std::array<const char*, 2> gXmlSchemaFormatStrings = {{
+static const std::array<std::string, 2> gXmlSchemaFormatStrings = {{
     "dtd", "xsd",
 }};
 
