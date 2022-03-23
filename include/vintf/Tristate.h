@@ -30,7 +30,7 @@ enum class Tristate : size_t {
     MODULE
 };
 
-static constexpr std::array<const char*, 3> gTristateStrings = {
+static const std::array<std::string, 3> gTristateStrings = {
     {
         "n",
         "y",
