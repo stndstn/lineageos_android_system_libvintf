@@ -17,10 +17,7 @@
 // Convert objects from and to strings.
 
 #include "parse_string.h"
-
 #include <android-base/parseint.h>
-
-#include "constants-private.h"
 
 namespace android {
 using base::ParseUint;
@@ -236,17 +233,13 @@ std::ostream &operator<<(std::ostream &os, const Version &ver) {
     return os << ver.majorVer << "." << ver.minorVer;
 }
 
-// Helper for parsing a VersionRange object. versionParser defines how the first half
-// (before the '-' character) of the string is parsed.
-static bool parseVersionRange(
-    const std::string& s, VersionRange* vr,
-    const std::function<bool(const std::string&, Version*)>& versionParser) {
+bool parse(const std::string &s, VersionRange *vr) {
     std::vector<std::string> v = SplitString(s, '-');
     if (v.size() != 1 && v.size() != 2) {
         return false;
     }
     Version minVer;
-    if (!versionParser(v[0], &minVer)) {
+    if (!parse(v[0], &minVer)) {
         return false;
     }
     if (v.size() == 1) {
@@ -259,11 +252,6 @@ static bool parseVersionRange(
         *vr = VersionRange(minVer.majorVer, minVer.minorVer, maxMinor);
     }
     return true;
-}
-
-bool parse(const std::string& s, VersionRange* vr) {
-    bool (*versionParser)(const std::string&, Version*) = parse;
-    return parseVersionRange(s, vr, versionParser);
 }
 
 std::ostream &operator<<(std::ostream &os, const VersionRange &vr) {
@@ -384,6 +372,32 @@ std::ostream &operator<<(std::ostream &os, const ManifestHal &hal) {
               << hal.versions;
 }
 
+bool parse(const std::string &s, MatrixHal *req) {
+    std::vector<std::string> v = SplitString(s, '/');
+    if (v.size() != 4) {
+        return false;
+    }
+    if (!parse(v[0], &req->format)) {
+        return false;
+    }
+    req->name = v[1];
+    if (!parse(v[2], &req->versionRanges)) {
+        return false;
+    }
+    if (v[3] != kRequired || v[3] != kOptional) {
+        return false;
+    }
+    req->optional = (v[3] == kOptional);
+    return true;
+}
+
+std::ostream &operator<<(std::ostream &os, const MatrixHal &req) {
+    return os << req.format << "/"
+              << req.name << "/"
+              << req.versionRanges << "/"
+              << (req.optional ? kOptional : kRequired);
+}
+
 std::string expandInstances(const MatrixHal& req, const VersionRange& vr, bool brace) {
     std::string s;
     size_t count = 0;
@@ -393,8 +407,8 @@ std::string expandInstances(const MatrixHal& req, const VersionRange& vr, bool b
                                                  : matrixInstance.exactInstance();
         switch (req.format) {
             case HalFormat::AIDL: {
-                s += toFQNameString(matrixInstance.interface(), instance) + " (@" +
-                     aidlVersionRangeToString(vr) + ")";
+                // Hide fake version when printing human-readable error messages.
+                s += toFQNameString(matrixInstance.interface(), instance);
             } break;
             case HalFormat::HIDL:
                 [[fallthrough]];
@@ -531,25 +545,6 @@ std::string toAidlFqnameString(const std::string& package, const std::string& in
         ss << "/" << instance;
     }
     return ss.str();
-}
-
-std::string aidlVersionToString(const Version& v) {
-    return to_string(v.minorVer);
-}
-bool parseAidlVersion(const std::string& s, Version* version) {
-    version->majorVer = details::kFakeAidlMajorVersion;
-    return android::base::ParseUint(s, &version->minorVer);
-}
-
-std::string aidlVersionRangeToString(const VersionRange& vr) {
-    if (vr.isSingleVersion()) {
-        return to_string(vr.minMinor);
-    }
-    return to_string(vr.minMinor) + "-" + to_string(vr.maxMinor);
-}
-
-bool parseAidlVersionRange(const std::string& s, VersionRange* vr) {
-    return parseVersionRange(s, vr, parseAidlVersion);
 }
 
 } // namespace vintf

@@ -45,10 +45,6 @@ status_t MockRuntimeInfo::doFetch(RuntimeInfo::FetchFlags flags) {
         mKernel.mVersion = kernel_info_.mVersion;
     }
 
-    if (flags & RuntimeInfo::FetchFlag::KERNEL_FCM && kernel_info_.mLevel != Level::UNSPECIFIED) {
-        mKernel.mLevel = kernel_info_.mLevel;
-    }
-
     if (flags & RuntimeInfo::FetchFlag::POLICYVERS) {
         mKernelSepolicyVersion = 30;
     }
@@ -68,9 +64,6 @@ void MockRuntimeInfo::setNextFetchKernelInfo(const KernelVersion& v,
                                              const std::map<std::string, std::string>& configs) {
     kernel_info_.mVersion = v;
     kernel_info_.mConfigs = configs;
-}
-void MockRuntimeInfo::setNextFetchKernelLevel(Level level) {
-    kernel_info_.mLevel = level;
 }
 
 }  // namespace details

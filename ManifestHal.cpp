@@ -15,62 +15,27 @@
  */
 
 #include "ManifestHal.h"
-
 #include <unordered_set>
 
 #include "MapValueIterator.h"
 #include "constants-private.h"
 #include "parse_string.h"
-#include "utils.h"
 
 namespace android {
 namespace vintf {
 
-using details::canConvertToFqInstance;
-
-bool ManifestHal::isValid(std::string* error) const {
-    if (error) {
-        error->clear();
-    }
-
-    bool success = true;
-    std::map<size_t, Version> existing;
+bool ManifestHal::isValid() const {
+    std::unordered_set<size_t> existing;
     for (const auto &v : versions) {
-        auto&& [it, inserted] = existing.emplace(v.majorVer, v);
-        if (inserted) {
-            continue;
+        if (existing.find(v.majorVer) != existing.end()) {
+            return false;
         }
-        success = false;
-        if (error) {
-            *error += "Duplicated major version: " + to_string(v) + " vs. " +
-                      to_string(it->second) + ".\n";
-        }
+        existing.insert(v.majorVer);
     }
-
-    // Check legacy instances (i.e. <version> + <interface> + <instance>) can be
-    // converted into FqInstance because forEachInstance relies on FqInstance.
-    for (const auto& v : versions) {
-        for (const auto& intf : iterateValues(interfaces)) {
-            intf.forEachInstance(
-                [&](const auto& interface, const auto& instance, bool /* isRegex */) {
-                    if (!canConvertToFqInstance(getName(), v, interface, instance, format, error)) {
-                        success = false;
-                    }
-                    return true;  // continue
-                });
-        }
-    }
-
-    std::string transportArchError;
-    if (!transportArch.isValid(&transportArchError)) {
-        success = false;
-        if (error) *error += transportArchError + "\n";
-    }
-    return success;
+    return transportArch.isValid();
 }
 
 bool ManifestHal::operator==(const ManifestHal &other) const {
-    // ignore fileName().
     if (format != other.format)
         return false;
     if (name != other.name)
@@ -80,7 +45,6 @@ bool ManifestHal::operator==(const ManifestHal &other) const {
     if (!(transportArch == other.transportArch)) return false;
     if (interfaces != other.interfaces) return false;
     if (isOverride() != other.isOverride()) return false;
-    if (updatableViaApex() != other.updatableViaApex()) return false;
     if (mAdditionalInstances != other.mAdditionalInstances) return false;
     return true;
 }
@@ -94,7 +58,7 @@ bool ManifestHal::forEachInstance(const std::function<bool(const ManifestInstanc
                 FqInstance fqInstance;
                 if (fqInstance.setTo(getName(), v.majorVer, v.minorVer, interface, instance)) {
                     if (!func(ManifestInstance(std::move(fqInstance), TransportArch{transportArch},
-                                               format, updatableViaApex()))) {
+                                               format))) {
                         return false;
                     }
                 }
@@ -107,19 +71,8 @@ bool ManifestHal::forEachInstance(const std::function<bool(const ManifestInstanc
     }
 
     for (const auto& manifestInstance : mAdditionalInstances) {
-        // For AIDL HALs, <version> tag is mangled with <fqname>. Note that if there's no
-        // <version> tag, libvintf will create one by default, so each <fqname> is executed
-        // at least once.
-        if (format == HalFormat::AIDL) {
-            for (const auto& v : versions) {
-                if (!func(manifestInstance.withVersion(v))) {
-                    return false;
-                }
-            }
-        } else {
-            if (!func(manifestInstance)) {
-                return false;
-            }
+        if (!func(manifestInstance)) {
+            return false;
         }
     }
 
@@ -203,8 +156,7 @@ bool ManifestHal::insertInstance(const FqInstance& e, std::string* error) {
         return false;
     }
 
-    mAdditionalInstances.emplace(std::move(toAdd), this->transportArch, this->format,
-                                 this->updatableViaApex());
+    mAdditionalInstances.emplace(std::move(toAdd), this->transportArch, this->format);
     return true;
 }
 

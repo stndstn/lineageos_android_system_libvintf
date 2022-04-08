@@ -31,20 +31,6 @@ namespace vintf {
 
 using details::mergeField;
 
-bool CompatibilityMatrix::add(MatrixHal&& halToAdd, std::string*) {
-    CHECK(addInternal(std::move(halToAdd)) != nullptr);
-    return true;
-}
-
-bool CompatibilityMatrix::addAllHals(CompatibilityMatrix* other, std::string*) {
-    std::string internalError;
-    for (auto& pair : other->mHals) {
-        CHECK(add(std::move(pair.second), &internalError)) << internalError;
-    }
-    other->mHals.clear();
-    return true;
-}
-
 bool CompatibilityMatrix::addKernel(MatrixKernel&& kernel, std::string* error) {
     if (mType != SchemaType::FRAMEWORK) {
         if (error) {
@@ -120,7 +106,8 @@ Level CompatibilityMatrix::level() const {
 
 status_t CompatibilityMatrix::fetchAllInformation(const FileSystem* fileSystem,
                                                   const std::string& path, std::string* error) {
-    return details::fetchAllInformation(fileSystem, path, this, error);
+    return details::fetchAllInformation(fileSystem, path, gCompatibilityMatrixConverter, this,
+                                        error);
 }
 
 std::string CompatibilityMatrix::getXmlSchemaPath(const std::string& xmlFileName,
@@ -316,7 +303,6 @@ bool CompatibilityMatrix::addSystemSdk(CompatibilityMatrix* other, std::string* 
 }
 
 bool operator==(const CompatibilityMatrix &lft, const CompatibilityMatrix &rgt) {
-    // ignore fileName().
     return lft.mType == rgt.mType && lft.mLevel == rgt.mLevel && lft.mHals == rgt.mHals &&
            lft.mXmlFiles == rgt.mXmlFiles &&
            (lft.mType != SchemaType::DEVICE ||
@@ -334,12 +320,12 @@ bool operator==(const CompatibilityMatrix &lft, const CompatibilityMatrix &rgt) 
 }
 
 std::unique_ptr<CompatibilityMatrix> CompatibilityMatrix::combine(
-    Level deviceLevel, std::vector<CompatibilityMatrix>* matrices, std::string* error) {
+    Level deviceLevel, std::vector<Named<CompatibilityMatrix>>* matrices, std::string* error) {
     // Check type.
     for (const auto& e : *matrices) {
-        if (e.type() != SchemaType::FRAMEWORK) {
+        if (e.object.type() != SchemaType::FRAMEWORK) {
             if (error) {
-                *error = "File \"" + e.fileName() + "\" is not a framework compatibility matrix.";
+                *error = "File \"" + e.name + "\" is not a framework compatibility matrix.";
                 return nullptr;
             }
         }
@@ -347,15 +333,15 @@ std::unique_ptr<CompatibilityMatrix> CompatibilityMatrix::combine(
 
     // Matrices with unspecified (empty) level are auto-filled with deviceLevel.
     for (auto& e : *matrices) {
-        if (e.level() == Level::UNSPECIFIED) {
-            e.mLevel = deviceLevel;
+        if (e.object.level() == Level::UNSPECIFIED) {
+            e.object.mLevel = deviceLevel;
         }
     }
 
     // Add from low to high FCM version so that optional <kernel> requirements are added correctly.
     // See comment in addAllAsOptional.
     std::sort(matrices->begin(), matrices->end(),
-              [](const auto& x, const auto& y) { return x.level() < y.level(); });
+              [](const auto& x, const auto& y) { return x.object.level() < y.object.level(); });
 
     auto baseMatrix = std::make_unique<CompatibilityMatrix>();
     baseMatrix->mLevel = deviceLevel;
@@ -363,31 +349,31 @@ std::unique_ptr<CompatibilityMatrix> CompatibilityMatrix::combine(
 
     std::vector<std::string> parsedFiles;
     for (auto& e : *matrices) {
-        if (e.level() < deviceLevel) {
+        if (e.object.level() < deviceLevel) {
             continue;
         }
 
         bool success = false;
-        if (e.level() == deviceLevel) {
+        if (e.object.level() == deviceLevel) {
             success = baseMatrix->addAll(&e, error);
         } else {
             success = baseMatrix->addAllAsOptional(&e, error);
         }
         if (!success) {
             if (error) {
-                *error = "Conflict when merging \"" + e.fileName() + "\": " + *error + "\n" +
+                *error = "Conflict when merging \"" + e.name + "\": " + *error + "\n" +
                          "Previous files:\n" + base::Join(parsedFiles, "\n");
             }
             return nullptr;
         }
-        parsedFiles.push_back(e.fileName());
+        parsedFiles.push_back(e.name);
     }
 
     return baseMatrix;
 }
 
 std::unique_ptr<CompatibilityMatrix> CompatibilityMatrix::combineDeviceMatrices(
-    std::vector<CompatibilityMatrix>* matrices, std::string* error) {
+    std::vector<Named<CompatibilityMatrix>>* matrices, std::string* error) {
     auto baseMatrix = std::make_unique<CompatibilityMatrix>();
     baseMatrix->mType = SchemaType::DEVICE;
 
@@ -396,34 +382,36 @@ std::unique_ptr<CompatibilityMatrix> CompatibilityMatrix::combineDeviceMatrices(
         bool success = baseMatrix->addAll(&e, error);
         if (!success) {
             if (error) {
-                *error = "Conflict when merging \"" + e.fileName() + "\": " + *error + "\n" +
+                *error = "Conflict when merging \"" + e.name + "\": " + *error + "\n" +
                          "Previous files:\n" + base::Join(parsedFiles, "\n");
             }
             return nullptr;
         }
-        parsedFiles.push_back(e.fileName());
+        parsedFiles.push_back(e.name);
     }
     return baseMatrix;
 }
 
-bool CompatibilityMatrix::addAll(CompatibilityMatrix* inputMatrix, std::string* error) {
-    if (!addAllHals(inputMatrix, error) || !addAllXmlFiles(inputMatrix, error) ||
-        !addAllKernels(inputMatrix, error) || !addSepolicy(inputMatrix, error) ||
-        !addAvbMetaVersion(inputMatrix, error) || !addVndk(inputMatrix, error) ||
-        !addVendorNdk(inputMatrix, error) || !addSystemSdk(inputMatrix, error)) {
+bool CompatibilityMatrix::addAll(Named<CompatibilityMatrix>* inputMatrix, std::string* error) {
+    if (!addAllHals(&inputMatrix->object, error) || !addAllXmlFiles(&inputMatrix->object, error) ||
+        !addAllKernels(&inputMatrix->object, error) || !addSepolicy(&inputMatrix->object, error) ||
+        !addAvbMetaVersion(&inputMatrix->object, error) || !addVndk(&inputMatrix->object, error) ||
+        !addVendorNdk(&inputMatrix->object, error) || !addSystemSdk(&inputMatrix->object, error)) {
         if (error) {
-            *error = "File \"" + inputMatrix->fileName() + "\" cannot be added: " + *error + ".";
+            *error = "File \"" + inputMatrix->name + "\" cannot be added: " + *error + ".";
         }
         return false;
     }
     return true;
 }
 
-bool CompatibilityMatrix::addAllAsOptional(CompatibilityMatrix* inputMatrix, std::string* error) {
-    if (!addAllHalsAsOptional(inputMatrix, error) ||
-        !addAllXmlFilesAsOptional(inputMatrix, error) || !addAllKernels(inputMatrix, error)) {
+bool CompatibilityMatrix::addAllAsOptional(Named<CompatibilityMatrix>* inputMatrix,
+                                           std::string* error) {
+    if (!addAllHalsAsOptional(&inputMatrix->object, error) ||
+        !addAllXmlFilesAsOptional(&inputMatrix->object, error) ||
+        !addAllKernels(&inputMatrix->object, error)) {
         if (error) {
-            *error = "File \"" + inputMatrix->fileName() + "\" cannot be added: " + *error;
+            *error = "File \"" + inputMatrix->name + "\" cannot be added: " + *error;
         }
         return false;
     }
@@ -458,11 +446,6 @@ bool CompatibilityMatrix::matchInstance(HalFormat format, const std::string& hal
                                          return !found;  // if not found, continue
                                      });
     return found;
-}
-
-std::vector<VersionRange> CompatibilityMatrix::getSepolicyVersions() const {
-    if (type() == SchemaType::FRAMEWORK) return framework.mSepolicy.sepolicyVersions();
-    return {};
 }
 
 std::string CompatibilityMatrix::getVendorNdkVersion() const {

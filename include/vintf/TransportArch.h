@@ -52,7 +52,7 @@ struct TransportArch {
     // <transport arch="32+64">passthrough</transport>
     // <transport>hwbinder</transport>
     // Element doesn't exist
-    bool isValid(std::string* error = nullptr) const;
+    bool isValid() const;
 };
 
 

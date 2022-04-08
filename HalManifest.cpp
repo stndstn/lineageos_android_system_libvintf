@@ -41,59 +41,27 @@ using details::InstancesOfVersion;
 using details::mergeField;
 
 // Check <version> tag for all <hal> with the same name.
-bool HalManifest::shouldAdd(const ManifestHal& hal, std::string* error) const {
-    if (!hal.isValid(error)) {
-        if (error) {
-            error->insert(0, "HAL '" + hal.name + "' is not valid: ");
-            if (!hal.fileName().empty()) {
-                error->insert(0, "For file " + hal.fileName() + ": ");
-            }
-        }
+bool HalManifest::shouldAdd(const ManifestHal& hal) const {
+    if (!hal.isValid()) {
         return false;
     }
     if (hal.isOverride()) {
         return true;
     }
-    return addingConflictingMajorVersion(hal, error);
-}
-
-bool HalManifest::addingConflictingMajorVersion(const ManifestHal& hal, std::string* error) const {
-    // Skip checking for AIDL HALs because they all contain kFakeAidlMajorVersion.
-    if (hal.format == HalFormat::AIDL) {
-        return true;
-    }
-
     auto existingHals = mHals.equal_range(hal.name);
-    std::map<size_t, std::tuple<const ManifestHal*, Version>> existing;
+    std::set<size_t> existingMajorVersions;
     for (auto it = existingHals.first; it != existingHals.second; ++it) {
-        const ManifestHal& existingHal = it->second;
-        for (const auto& v : existingHal.versions) {
+        for (const auto& v : it->second.versions) {
             // Assume integrity on existingHals, so no check on emplace().second
-            existing.emplace(v.majorVer, std::make_tuple(&existingHal, v));
+            existingMajorVersions.insert(v.majorVer);
         }
     }
-    bool success = true;
     for (const auto& v : hal.versions) {
-        auto&& [existingIt, inserted] = existing.emplace(v.majorVer, std::make_tuple(&hal, v));
-        if (inserted) {
-            continue;
-        }
-        success = false;
-        if (error) {
-            auto&& [existingHal, existingVersion] = existingIt->second;
-            *error = "Conflicting major version: " + to_string(existingVersion);
-            if (!existingHal->fileName().empty()) {
-                *error += " (from " + existingHal->fileName() + ")";
-            }
-            *error += " vs. " + to_string(v);
-            if (!hal.fileName().empty()) {
-                *error += " (from " + hal.fileName() + ")";
-            }
-            *error +=
-                ". Check whether or not multiple modules providing the same HAL are installed.";
+        if (!existingMajorVersions.emplace(v.majorVer).second /* no insertion */) {
+            return false;
         }
     }
-    return success;
+    return true;
 }
 
 // Remove elements from "list" if p(element) returns true.
@@ -122,7 +90,7 @@ void HalManifest::removeHals(const std::string& name, size_t majorVer) {
     });
 }
 
-bool HalManifest::add(ManifestHal&& halToAdd, std::string* error) {
+bool HalManifest::add(ManifestHal&& halToAdd) {
     if (halToAdd.isOverride()) {
         if (halToAdd.isDisabledHal()) {
             // Special syntax when there are no instances at all. Remove all existing HALs
@@ -135,25 +103,7 @@ bool HalManifest::add(ManifestHal&& halToAdd, std::string* error) {
         }
     }
 
-    if (!shouldAdd(halToAdd, error)) {
-        return false;
-    }
-
-    CHECK(addInternal(std::move(halToAdd)) != nullptr);
-    return true;
-}
-
-bool HalManifest::addAllHals(HalManifest* other, std::string* error) {
-    for (auto& pair : other->mHals) {
-        if (!add(std::move(pair.second), error)) {
-            if (error) {
-                error->insert(0, "HAL \"" + pair.first + "\" has a conflict: ");
-            }
-            return false;
-        }
-    }
-    other->mHals.clear();
-    return true;
+    return HalGroup::add(std::move(halToAdd));
 }
 
 bool HalManifest::shouldAddXmlFile(const ManifestXmlFile& xmlFile) const {
@@ -249,12 +199,12 @@ std::vector<std::string> HalManifest::checkIncompatibleHals(const CompatibilityM
         }
 
         std::set<FqInstance> manifestInstances;
-        std::set<std::string> manifestInstanceDesc;
+        std::set<std::string> simpleManifestInstances;
         std::set<Version> versions;
         for (const ManifestHal* manifestHal : getHals(matrixHal.name)) {
             manifestHal->forEachInstance([&](const auto& manifestInstance) {
                 manifestInstances.insert(manifestInstance.getFqInstance());
-                manifestInstanceDesc.insert(manifestInstance.descriptionWithoutPackage());
+                simpleManifestInstances.insert(manifestInstance.getSimpleFqInstance());
                 return true;
             });
             manifestHal->appendAllVersions(&versions);
@@ -268,7 +218,7 @@ std::vector<std::string> HalManifest::checkIncompatibleHals(const CompatibilityM
             if (manifestInstances.empty()) {
                 multilineIndent(oss, 8, versions);
             } else {
-                multilineIndent(oss, 8, manifestInstanceDesc);
+                multilineIndent(oss, 8, simpleManifestInstances);
             }
 
             ret.insert(ret.end(), oss.str());
@@ -354,11 +304,10 @@ static bool checkVendorNdkCompatibility(const VendorNdk& matVendorNdk,
     // no match is found.
     if (error != nullptr) {
         *error = "Vndk version " + matVendorNdk.version() + " is not supported. " +
-                 "Supported versions in framework manifest are: [";
+                 "Supported versions in framework manifest are:";
         for (const auto& vndk : manifestVendorNdk) {
             *error += " " + vndk.version();
         }
-        *error += "]";
     }
     return false;
 }
@@ -427,15 +376,9 @@ bool HalManifest::checkCompatibility(const CompatibilityMatrix& mat, std::string
             return false;
         }
 
-        // Not using inferredKernelLevel() to preserve the legacy behavior if <kernel> does not have
-        // level attribute.
-        // Note that shouldCheckKernelCompatibility() only returns true on host, because the
-        // on-device HalManifest does not have kernel version set. On the device, kernel information
-        // is retrieved from RuntimeInfo.
-        Level kernelTagLevel = kernel()->level();
         if (flags.isKernelEnabled() && shouldCheckKernelCompatibility() &&
             kernel()
-                ->getMatchedKernelRequirements(mat.framework.mKernels, kernelTagLevel, error)
+                ->getMatchedKernelRequirements(mat.framework.mKernels, kernel()->level(), error)
                 .empty()) {
             return false;
         }
@@ -448,23 +391,15 @@ bool HalManifest::shouldCheckKernelCompatibility() const {
     return kernel().has_value() && kernel()->version() != KernelVersion{};
 }
 
-CompatibilityMatrix HalManifest::generateCompatibleMatrix(bool optional) const {
+CompatibilityMatrix HalManifest::generateCompatibleMatrix() const {
     CompatibilityMatrix matrix;
 
-    std::set<std::tuple<HalFormat, std::string, Version, std::string, std::string>> instances;
-
-    forEachInstance([&matrix, &instances, optional](const ManifestInstance& e) {
-        auto&& [it, added] =
-            instances.emplace(e.format(), e.package(), e.version(), e.interface(), e.instance());
-        if (!added) {
-            return true;
-        }
-
+    forEachInstance([&matrix](const ManifestInstance& e) {
         matrix.add(MatrixHal{
             .format = e.format(),
             .name = e.package(),
             .versionRanges = {VersionRange{e.version().majorVer, e.version().minorVer}},
-            .optional = optional,
+            .optional = true,
             .interfaces = {{e.interface(), HalInterface{e.interface(), {e.instance()}}}}});
         return true;
     });
@@ -482,7 +417,7 @@ CompatibilityMatrix HalManifest::generateCompatibleMatrix(bool optional) const {
 
 status_t HalManifest::fetchAllInformation(const FileSystem* fileSystem, const std::string& path,
                                           std::string* error) {
-    return details::fetchAllInformation(fileSystem, path, this, error);
+    return details::fetchAllInformation(fileSystem, path, gHalManifestConverter, this, error);
 }
 
 SchemaType HalManifest::type() const {
@@ -530,7 +465,6 @@ std::string HalManifest::getXmlFilePath(const std::string& xmlFileName,
 }
 
 bool operator==(const HalManifest &lft, const HalManifest &rgt) {
-    // ignore fileName().
     return lft.mType == rgt.mType && lft.mLevel == rgt.mLevel && lft.mHals == rgt.mHals &&
            lft.mXmlFiles == rgt.mXmlFiles &&
            (lft.mType != SchemaType::DEVICE ||
@@ -578,13 +512,7 @@ std::set<std::string> HalManifest::getHidlInstances(const std::string& package,
 
 std::set<std::string> HalManifest::getAidlInstances(const std::string& package,
                                                     const std::string& interfaceName) const {
-    return getAidlInstances(package, 0, interfaceName);
-}
-
-std::set<std::string> HalManifest::getAidlInstances(const std::string& package, size_t version,
-                                                    const std::string& interfaceName) const {
-    return getInstances(HalFormat::AIDL, package, {details::kFakeAidlMajorVersion, version},
-                        interfaceName);
+    return getInstances(HalFormat::AIDL, package, details::kFakeAidlVersion, interfaceName);
 }
 
 bool HalManifest::hasHidlInstance(const std::string& package, const Version& version,
@@ -595,13 +523,7 @@ bool HalManifest::hasHidlInstance(const std::string& package, const Version& ver
 
 bool HalManifest::hasAidlInstance(const std::string& package, const std::string& interface,
                                   const std::string& instance) const {
-    return hasAidlInstance(package, 0, interface, instance);
-}
-
-bool HalManifest::hasAidlInstance(const std::string& package, size_t version,
-                                  const std::string& interface, const std::string& instance) const {
-    return hasInstance(HalFormat::AIDL, package, {details::kFakeAidlMajorVersion, version},
-                       interface, instance);
+    return hasInstance(HalFormat::AIDL, package, details::kFakeAidlVersion, interface, instance);
 }
 
 bool HalManifest::insertInstance(const FqInstance& fqInstance, Transport transport, Arch arch,
@@ -714,21 +636,6 @@ bool HalManifest::addAll(HalManifest* other, std::string* error) {
     }
 
     return true;
-}
-
-Level HalManifest::inferredKernelLevel() const {
-    if (kernel().has_value()) {
-        if (kernel()->level() != Level::UNSPECIFIED) {
-            return kernel()->level();
-        }
-    }
-    // As a special case, for devices launching with R and above, also infer from <manifest>.level.
-    // Devices launching before R may leave kernel level unspecified to use legacy kernel
-    // matching behavior; see KernelInfo::getMatchedKernelRequirements.
-    if (level() >= Level::R) {
-        return level();
-    }
-    return Level::UNSPECIFIED;
 }
 
 } // namespace vintf

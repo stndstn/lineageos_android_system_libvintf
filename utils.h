@@ -31,14 +31,8 @@ namespace vintf {
 namespace details {
 
 template <typename T>
-status_t fetchAllInformation(const FileSystem* fileSystem, const std::string& path, T* outObject,
-                             std::string* error) {
-    if (outObject->fileName().empty()) {
-        outObject->setFileName(path);
-    } else {
-        outObject->setFileName(outObject->fileName() + ":" + path);
-    }
-
+status_t fetchAllInformation(const FileSystem* fileSystem, const std::string& path,
+                             const XmlConverter<T>& converter, T* outObject, std::string* error) {
     std::string info;
     status_t result = fileSystem->fetch(path, &info, error);
 
@@ -46,7 +40,7 @@ status_t fetchAllInformation(const FileSystem* fileSystem, const std::string& pa
         return result;
     }
 
-    bool success = fromXml(outObject, info, error);
+    bool success = converter(outObject, info, error);
     if (!success) {
         if (error) {
             *error = "Illformed file: " + path + ": " + *error;
@@ -105,13 +99,6 @@ static bool mergeField(T* dst, T* src, const T& empty = T{}) {
     }
     return false;
 }
-
-// Check legacy instances (i.e. <version> + <interface> + <instance>) can be
-// converted into FqInstance because forEachInstance relies on FqInstance.
-// If error and appendedError is not null, error message is appended to appendedError.
-[[nodiscard]] bool canConvertToFqInstance(const std::string& package, const Version& version,
-                                          const std::string& interface, const std::string& instance,
-                                          HalFormat format, std::string* appendedError);
 
 }  // namespace details
 }  // namespace vintf

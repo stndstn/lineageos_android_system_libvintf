@@ -26,7 +26,7 @@
 #include <android-base/file.h>
 #include <android-base/parseint.h>
 #include <android-base/strings.h>
-#include <libvts_vintf_test_common/common.h>
+
 #include <vintf/AssembleVintf.h>
 #include <vintf/KernelConfigParser.h>
 #include <vintf/parse_string.h>
@@ -47,12 +47,10 @@ static const std::string gBaseConfig = "android-base.config";
 // It takes ownership on the istream.
 class NamedIstream {
    public:
-    NamedIstream() = default;
     NamedIstream(const std::string& name, std::unique_ptr<std::istream>&& stream)
         : mName(name), mStream(std::move(stream)) {}
     const std::string& name() const { return mName; }
     std::istream& stream() { return *mStream; }
-    bool hasStream() { return mStream != nullptr; }
 
    private:
     std::string mName;
@@ -109,7 +107,7 @@ class AssembleVintfImpl : public AssembleVintf {
     }
 
     /**
-     * Set *out to environment variable only if *out is default constructed.
+     * Set *out to environment variable only if *out is a dummy value (i.e. default constructed).
      * Return false if a fatal error has occurred:
      * - The environment variable has an unknown format
      * - The value of the environment variable does not match a predefined variable in the files
@@ -296,16 +294,18 @@ class AssembleVintfImpl : public AssembleVintf {
         return true;
     }
 
-    using HalManifests = std::vector<HalManifest>;
-    using CompatibilityMatrices = std::vector<CompatibilityMatrix>;
+    template <typename S>
+    using Schemas = std::vector<Named<S>>;
+    using HalManifests = Schemas<HalManifest>;
+    using CompatibilityMatrices = Schemas<CompatibilityMatrix>;
 
     template <typename M>
-    void outputInputs(const std::vector<M>& inputs) {
+    void outputInputs(const Schemas<M>& inputs) {
         out() << "<!--" << std::endl;
         out() << "    Input:" << std::endl;
         for (const auto& e : inputs) {
-            if (!e.fileName().empty()) {
-                out() << "        " << base::Basename(e.fileName()) << std::endl;
+            if (!e.name.empty()) {
+                out() << "        " << base::Basename(e.name) << std::endl;
             }
         }
         out() << "-->" << std::endl;
@@ -349,19 +349,34 @@ class AssembleVintfImpl : public AssembleVintf {
         return true;
     }
 
+    void inferDeviceManifestKernelFcm(HalManifest* manifest) {
+        // No target FCM version.
+        if (manifest->level() == Level::UNSPECIFIED) return;
+        // target FCM version < R: leave value untouched.
+        if (manifest->level() < Level::R) return;
+        // Inject empty <kernel> tag if missing.
+        if (!manifest->kernel().has_value()) {
+            manifest->device.mKernel = std::make_optional<KernelInfo>();
+        }
+        // Kernel FCM already set.
+        if (manifest->kernel()->level() != Level::UNSPECIFIED) return;
+
+        manifest->device.mKernel->mLevel = manifest->level();
+    }
+
     bool assembleHalManifest(HalManifests* halManifests) {
         std::string error;
-        HalManifest* halManifest = &halManifests->front();
+        HalManifest* halManifest = &halManifests->front().object;
         for (auto it = halManifests->begin() + 1; it != halManifests->end(); ++it) {
-            const std::string& path = it->fileName();
-            HalManifest& manifestToAdd = *it;
+            const std::string& path = it->name;
+            HalManifest& manifestToAdd = it->object;
 
             if (manifestToAdd.level() != Level::UNSPECIFIED) {
                 if (halManifest->level() == Level::UNSPECIFIED) {
                     halManifest->mLevel = manifestToAdd.level();
                 } else if (halManifest->level() != manifestToAdd.level()) {
                     std::cerr << "Inconsistent FCM Version in HAL manifests:" << std::endl
-                              << "    File '" << halManifests->front().fileName() << "' has level "
+                              << "    File '" << halManifests->front().name << "' has level "
                               << halManifest->level() << std::endl
                               << "    File '" << path << "' has level " << manifestToAdd.level()
                               << std::endl;
@@ -387,6 +402,8 @@ class AssembleVintfImpl : public AssembleVintf {
             if (!setDeviceManifestKernel(halManifest)) {
                 return false;
             }
+
+            inferDeviceManifestKernelFcm(halManifest);
         }
 
         if (halManifest->mType == SchemaType::FRAMEWORK) {
@@ -414,16 +431,15 @@ class AssembleVintfImpl : public AssembleVintf {
                      "    Many entries other than HALs are zero-filled and\n"
                      "    require human attention. \n"
                      "-->\n"
-                  << toXml(generatedMatrix, mSerializeFlags);
+                  << gCompatibilityMatrixConverter(generatedMatrix, mSerializeFlags);
         } else {
-            out() << toXml(*halManifest, mSerializeFlags);
+            out() << gHalManifestConverter(*halManifest, mSerializeFlags);
         }
         out().flush();
 
-        if (mCheckFile.hasStream()) {
+        if (mCheckFile != nullptr) {
             CompatibilityMatrix checkMatrix;
-            checkMatrix.setFileName(mCheckFile.name());
-            if (!fromXml(&checkMatrix, read(mCheckFile.stream()), &error)) {
+            if (!gCompatibilityMatrixConverter(&checkMatrix, read(*mCheckFile), &error)) {
                 std::cerr << "Cannot parse check file as a compatibility matrix: " << error
                           << std::endl;
                 return false;
@@ -466,11 +482,6 @@ class AssembleVintfImpl : public AssembleVintf {
         size_t shippingApiLevel = getIntegerFlag("PRODUCT_SHIPPING_API_LEVEL");
 
         if (manifest->level() != Level::UNSPECIFIED) {
-            if (shippingApiLevel != 0) {
-                auto res = android::vintf::testing::TestTargetFcmVersion(manifest->level(),
-                                                                         shippingApiLevel);
-                if (!res.ok()) std::cerr << "Warning: " << res.error() << std::endl;
-            }
             return true;
         }
         if (!getBooleanFlag("PRODUCT_ENFORCE_VINTF_MANIFEST")) {
@@ -507,8 +518,8 @@ class AssembleVintfImpl : public AssembleVintf {
     Level getLowestFcmVersion(const CompatibilityMatrices& matrices) {
         Level ret = Level::UNSPECIFIED;
         for (const auto& e : matrices) {
-            if (ret == Level::UNSPECIFIED || ret > e.level()) {
-                ret = e.level();
+            if (ret == Level::UNSPECIFIED || ret > e.object.level()) {
+                ret = e.object.level();
             }
         }
         return ret;
@@ -520,16 +531,15 @@ class AssembleVintfImpl : public AssembleVintf {
         std::unique_ptr<HalManifest> checkManifest;
         std::unique_ptr<CompatibilityMatrix> builtMatrix;
 
-        if (mCheckFile.hasStream()) {
+        if (mCheckFile != nullptr) {
             checkManifest = std::make_unique<HalManifest>();
-            checkManifest->setFileName(mCheckFile.name());
-            if (!fromXml(checkManifest.get(), read(mCheckFile.stream()), &error)) {
+            if (!gHalManifestConverter(checkManifest.get(), read(*mCheckFile), &error)) {
                 std::cerr << "Cannot parse check file as a HAL manifest: " << error << std::endl;
                 return false;
             }
         }
 
-        if (matrices->front().mType == SchemaType::DEVICE) {
+        if (matrices->front().object.mType == SchemaType::DEVICE) {
             builtMatrix = CompatibilityMatrix::combineDeviceMatrices(matrices, &error);
             matrix = builtMatrix.get();
 
@@ -543,7 +553,7 @@ class AssembleVintfImpl : public AssembleVintf {
                 auto& valueInMatrix = matrix->device.mVendorNdk;
                 if (!valueInMatrix.version().empty() && valueInMatrix.version() != vndkVersion) {
                     std::cerr << "Hard-coded <vendor-ndk> version in device compatibility matrix ("
-                              << matrices->front().fileName() << "), '" << valueInMatrix.version()
+                              << matrices->front().name << "), '" << valueInMatrix.version()
                               << "', does not match value inferred "
                               << "from BOARD_VNDK_VERSION '" << vndkVersion << "'" << std::endl;
                     return false;
@@ -556,7 +566,7 @@ class AssembleVintfImpl : public AssembleVintf {
             }
         }
 
-        if (matrices->front().mType == SchemaType::FRAMEWORK) {
+        if (matrices->front().object.mType == SchemaType::FRAMEWORK) {
             Level deviceLevel =
                 checkManifest != nullptr ? checkManifest->level() : Level::UNSPECIFIED;
             if (deviceLevel == Level::UNSPECIFIED) {
@@ -616,7 +626,7 @@ class AssembleVintfImpl : public AssembleVintf {
                     false /* log */);
         }
         outputInputs(*matrices);
-        out() << toXml(*matrix, mSerializeFlags);
+        out() << gCompatibilityMatrixConverter(*matrix, mSerializeFlags);
         out().flush();
 
         if (checkManifest != nullptr && !checkDualFile(*checkManifest, *matrix)) {
@@ -628,22 +638,20 @@ class AssembleVintfImpl : public AssembleVintf {
 
     enum AssembleStatus { SUCCESS, FAIL_AND_EXIT, TRY_NEXT };
     template <typename Schema, typename AssembleFunc>
-    AssembleStatus tryAssemble(const std::string& schemaName, AssembleFunc assemble,
-                               std::string* error) {
-        std::vector<Schema> schemas;
+    AssembleStatus tryAssemble(const XmlConverter<Schema>& converter, const std::string& schemaName,
+                               AssembleFunc assemble, std::string* error) {
+        Schemas<Schema> schemas;
         Schema schema;
-        schema.setFileName(mInFiles.front().name());
-        if (!fromXml(&schema, read(mInFiles.front().stream()), error)) {
+        if (!converter(&schema, read(mInFiles.front().stream()), error)) {
             return TRY_NEXT;
         }
         auto firstType = schema.type();
-        schemas.emplace_back(std::move(schema));
+        schemas.emplace_back(mInFiles.front().name(), std::move(schema));
 
         for (auto it = mInFiles.begin() + 1; it != mInFiles.end(); ++it) {
             Schema additionalSchema;
             const std::string& fileName = it->name();
-            additionalSchema.setFileName(fileName);
-            if (!fromXml(&additionalSchema, read(it->stream()), error)) {
+            if (!converter(&additionalSchema, read(it->stream()), error)) {
                 std::cerr << "File \"" << fileName << "\" is not a valid " << firstType << " "
                           << schemaName << " (but the first file is a valid " << firstType << " "
                           << schemaName << "). Error: " << *error << std::endl;
@@ -656,7 +664,7 @@ class AssembleVintfImpl : public AssembleVintf {
                 return FAIL_AND_EXIT;
             }
 
-            schemas.emplace_back(std::move(additionalSchema));
+            schemas.emplace_back(fileName, std::move(additionalSchema));
         }
         return assemble(&schemas) ? SUCCESS : FAIL_AND_EXIT;
     }
@@ -669,18 +677,18 @@ class AssembleVintfImpl : public AssembleVintf {
         }
 
         std::string manifestError;
-        auto status = tryAssemble<HalManifest>(
-            "manifest", std::bind(&AssembleVintfImpl::assembleHalManifest, this, _1),
-            &manifestError);
+        auto status = tryAssemble(gHalManifestConverter, "manifest",
+                                  std::bind(&AssembleVintfImpl::assembleHalManifest, this, _1),
+                                  &manifestError);
         if (status == SUCCESS) return true;
         if (status == FAIL_AND_EXIT) return false;
 
         resetInFiles();
 
         std::string matrixError;
-        status = tryAssemble<CompatibilityMatrix>(
-            "compatibility matrix",
-            std::bind(&AssembleVintfImpl::assembleCompatibilityMatrix, this, _1), &matrixError);
+        status = tryAssemble(gCompatibilityMatrixConverter, "compatibility matrix",
+                             std::bind(&AssembleVintfImpl::assembleCompatibilityMatrix, this, _1),
+                             &matrixError);
         if (status == SUCCESS) return true;
         if (status == FAIL_AND_EXIT) return false;
 
@@ -701,9 +709,9 @@ class AssembleVintfImpl : public AssembleVintf {
         return it->stream();
     }
 
-    std::istream& setCheckInputStream(const std::string& name, Istream&& in) override {
-        mCheckFile = NamedIstream(name, std::move(in));
-        return mCheckFile.stream();
+    std::istream& setCheckInputStream(Istream&& in) override {
+        mCheckFile = std::move(in);
+        return *mCheckFile;
     }
 
     bool hasKernelVersion(const KernelVersion& kernelVer) const override {
@@ -757,7 +765,7 @@ class AssembleVintfImpl : public AssembleVintf {
    private:
     std::vector<NamedIstream> mInFiles;
     Ostream mOutRef;
-    NamedIstream mCheckFile;
+    Istream mCheckFile;
     bool mOutputMatrix = false;
     bool mHasSetHalsOnlyFlag = false;
     SerializeFlags::Type mSerializeFlags = SerializeFlags::EVERYTHING;
@@ -777,8 +785,7 @@ bool AssembleVintf::openInFile(const std::string& path) {
 }
 
 bool AssembleVintf::openCheckFile(const std::string& path) {
-    return static_cast<std::ifstream&>(
-               setCheckInputStream(path, std::make_unique<std::ifstream>(path)))
+    return static_cast<std::ifstream&>(setCheckInputStream(std::make_unique<std::ifstream>(path)))
         .is_open();
 }
 

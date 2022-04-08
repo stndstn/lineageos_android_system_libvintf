@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020 The Android Open Source Project
+ * Copyright (C) 2017 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,13 +14,19 @@
  * limitations under the License.
  */
 
-#pragma once
+#ifndef ANDROID_VINTF_NAMED_H
+#define ANDROID_VINTF_NAMED_H
 
-// Include this on top of a source file to work.
+#include <string>
 
-// gmock generates operator<< for each argument, including std::string*,
-// which libbase logging.h doesn't like.
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wuser-defined-warnings"
-#include <gmock/gmock.h>
-#pragma clang diagnostic pop
+template <typename T>
+struct Named {
+    std::string name;
+    T object;
+
+    Named() = default;
+    Named(const std::string& n, const T& o) : name(n), object(o) {}
+    Named(std::string&& n, T&& o) : name(std::move(n)), object(std::move(o)) {}
+};
+
+#endif  // ANDROID_VINTF_NAMED_H

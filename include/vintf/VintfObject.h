@@ -24,7 +24,6 @@
 #include <tuple>
 #include <vector>
 
-#include <aidl/metadata.h>
 #include <android-base/result.h>
 #include <hidl/metadata.h>
 
@@ -33,6 +32,7 @@
 #include "FileSystem.h"
 #include "HalManifest.h"
 #include "Level.h"
+#include "Named.h"
 #include "ObjectFactory.h"
 #include "PropertyFetcher.h"
 #include "RuntimeInfo.h"
@@ -41,8 +41,6 @@ namespace android {
 namespace vintf {
 
 namespace details {
-class CheckVintfUtils;
-class FmOnlyVintfObject;
 class VintfObjectAfterUpdate;
 
 template <typename T>
@@ -84,6 +82,8 @@ class VintfObjectCompatibleTest;
  * If any error, nullptr is returned, and Get will try to parse the HAL manifest
  * again when it is called again.
  * All these operations are thread-safe.
+ * If skipCache, always skip the cache in memory and read the files / get runtime information
+ * again from the device.
  */
 class VintfObject {
    public:
@@ -93,19 +93,20 @@ class VintfObject {
      * Return the API that access the device-side HAL manifests built from component pieces on the
      * vendor partition.
      */
-    virtual std::shared_ptr<const HalManifest> getDeviceHalManifest();
+    virtual std::shared_ptr<const HalManifest> getDeviceHalManifest(bool skipCache = false);
 
     /*
      * Return the API that access the framework-side HAL manifest built from component pieces on the
      * system partition.
      */
-    virtual std::shared_ptr<const HalManifest> getFrameworkHalManifest();
+    virtual std::shared_ptr<const HalManifest> getFrameworkHalManifest(bool skipCache = false);
 
     /*
      * Return the API that access the device-side compatibility matrix built from component pieces
      * on the vendor partition.
      */
-    virtual std::shared_ptr<const CompatibilityMatrix> getDeviceCompatibilityMatrix();
+    virtual std::shared_ptr<const CompatibilityMatrix> getDeviceCompatibilityMatrix(
+        bool skipCache = false);
 
     /*
      * Return the API that access the framework-side compatibility matrix built from component
@@ -114,7 +115,8 @@ class VintfObject {
      * This automatically selects the right compatibility matrix according to the target-level
      * specified by the device.
      */
-    virtual std::shared_ptr<const CompatibilityMatrix> getFrameworkCompatibilityMatrix();
+    virtual std::shared_ptr<const CompatibilityMatrix> getFrameworkCompatibilityMatrix(
+        bool skipCache = false);
 
     /*
      * Return the API that access device runtime info.
@@ -130,7 +132,7 @@ class VintfObject {
      * @param flags bitwise-or of RuntimeInfo::FetchFlag
      */
     std::shared_ptr<const RuntimeInfo> getRuntimeInfo(
-        RuntimeInfo::FetchFlags flags = RuntimeInfo::FetchFlag::ALL);
+        bool skipCache = false, RuntimeInfo::FetchFlags flags = RuntimeInfo::FetchFlag::ALL);
 
     /**
      * Check compatibility on the device.
@@ -222,21 +224,6 @@ class VintfObject {
     android::base::Result<void> checkUnusedHals(
         const std::vector<HidlInterfaceMetadata>& hidlMetadata);
 
-    // Check that all HALs are added to any framework compatibility matrix.
-    // If shouldCheck is set, only check if:
-    // - For HIDL, shouldCheck(packageAndVersion) (e.g. android.hardware.foo@1.0)
-    // - For AIDL and native, shouldCheck(package) (e.g. android.hardware.foo)
-    android::base::Result<void> checkMissingHalsInMatrices(
-        const std::vector<HidlInterfaceMetadata>& hidlMetadata,
-        const std::vector<AidlInterfaceMetadata>& aidlMetadata,
-        std::function<bool(const std::string&)> shouldCheck = {});
-
-    // Check that all HALs in all framework compatibility matrices have the
-    // proper interface definition (HIDL / AIDL files).
-    android::base::Result<void> checkMatrixHalsHasDefinition(
-        const std::vector<HidlInterfaceMetadata>& hidlMetadata,
-        const std::vector<AidlInterfaceMetadata>& aidlMetadata);
-
    private:
     std::unique_ptr<FileSystem> mFileSystem;
     std::unique_ptr<ObjectFactory<RuntimeInfo>> mRuntimeInfoFactory;
@@ -261,8 +248,6 @@ class VintfObject {
 
     // Expose functions to simulate dependency injection.
     friend class details::VintfObjectAfterUpdate;
-    friend class details::CheckVintfUtils;
-    friend class details::FmOnlyVintfObject;
 
    protected:
     virtual const std::unique_ptr<FileSystem>& getFileSystem();
@@ -271,7 +256,8 @@ class VintfObject {
 
    public:
     /*
-     * Get global instance. Results are cached.
+     * Get global instance. By default, this fetches from root and cache results,
+     * unless skipCache is specified.
      */
     static std::shared_ptr<VintfObject> GetInstance();
 
@@ -281,42 +267,50 @@ class VintfObject {
      * Return the API that access the device-side HAL manifest built from component pieces on the
      * vendor partition.
      */
-    static std::shared_ptr<const HalManifest> GetDeviceHalManifest();
+    static std::shared_ptr<const HalManifest> GetDeviceHalManifest(bool skipCache = false);
 
     /*
      * Return the API that access the framework-side HAL manifest built from component pieces on the
      * system partition.
      */
-    static std::shared_ptr<const HalManifest> GetFrameworkHalManifest();
+    static std::shared_ptr<const HalManifest> GetFrameworkHalManifest(bool skipCache = false);
 
     /*
      * Return the API that access the device-side compatibility matrix built from component pieces
      * on the vendor partition.
      */
-    static std::shared_ptr<const CompatibilityMatrix> GetDeviceCompatibilityMatrix();
+    static std::shared_ptr<const CompatibilityMatrix> GetDeviceCompatibilityMatrix(
+        bool skipCache = false);
 
     /*
      * Return the API that access the framework-side compatibility matrix built from component
      * pieces on the system partition.
      */
-    static std::shared_ptr<const CompatibilityMatrix> GetFrameworkCompatibilityMatrix();
+    static std::shared_ptr<const CompatibilityMatrix> GetFrameworkCompatibilityMatrix(
+        bool skipCache = false);
 
     /*
      * Return the API that access device runtime info.
      *
+     * {skipCache == true, flags == ALL}: re-fetch everything
+     * {skipCache == false, flags == ALL}: fetch everything if not previously fetched
+     * {skipCache == true, flags == selected info}: re-fetch selected information
+     *                                if not previously fetched.
+     * {skipCache == false, flags == selected info}: fetch selected information
+     *                                if not previously fetched.
+     *
+     * @param skipCache do not fetch if previously fetched
      * @param flags bitwise-or of RuntimeInfo::FetchFlag
-     *   flags == ALL: fetch everything if not previously fetched
-     *   flags == selected info: fetch selected information if not previously fetched.
      */
     static std::shared_ptr<const RuntimeInfo> GetRuntimeInfo(
-        RuntimeInfo::FetchFlags flags = RuntimeInfo::FetchFlag::ALL);
+        bool skipCache = false, RuntimeInfo::FetchFlags flags = RuntimeInfo::FetchFlag::ALL);
 
    private:
     status_t getCombinedFrameworkMatrix(const std::shared_ptr<const HalManifest>& deviceManifest,
                                         CompatibilityMatrix* out, std::string* error = nullptr);
-    status_t getAllFrameworkMatrixLevels(std::vector<CompatibilityMatrix>* out,
+    status_t getAllFrameworkMatrixLevels(std::vector<Named<CompatibilityMatrix>>* out,
                                          std::string* error = nullptr);
-    status_t getOneMatrix(const std::string& path, CompatibilityMatrix* out,
+    status_t getOneMatrix(const std::string& path, Named<CompatibilityMatrix>* out,
                           std::string* error = nullptr);
     status_t addDirectoryManifests(const std::string& directory, HalManifest* manifests,
                                    std::string* error = nullptr);
@@ -327,13 +321,6 @@ class VintfObject {
                                  std::string* error = nullptr);
     status_t fetchVendorHalManifest(HalManifest* out, std::string* error = nullptr);
     status_t fetchFrameworkHalManifest(HalManifest* out, std::string* error = nullptr);
-
-    status_t fetchUnfilteredFrameworkHalManifest(HalManifest* out, std::string* error);
-    void filterHalsByDeviceManifestLevel(HalManifest* out);
-
-    // Helper for checking matrices against lib*idlmetadata. Wrapper of the other variant of
-    // getAllFrameworkMatrixLevels. Treat empty output as an error.
-    android::base::Result<std::vector<CompatibilityMatrix>> getAllFrameworkMatrixLevels();
 
     using ChildrenMap = std::multimap<std::string, std::string>;
     static bool IsHalDeprecated(const MatrixHal& oldMatrixHal,
@@ -388,6 +375,30 @@ enum : int32_t {
 
 // exposed for testing.
 namespace details {
+
+extern const std::string kSystemVintfDir;
+extern const std::string kVendorVintfDir;
+extern const std::string kOdmVintfDir;
+extern const std::string kProductVintfDir;
+extern const std::string kSystemExtVintfDir;
+extern const std::string kOdmLegacyVintfDir;
+extern const std::string kOdmLegacyManifest;
+extern const std::string kVendorManifest;
+extern const std::string kSystemManifest;
+extern const std::string kVendorMatrix;
+extern const std::string kOdmManifest;
+extern const std::string kProductMatrix;
+extern const std::string kProductManifest;
+extern const std::string kSystemExtManifest;
+extern const std::string kVendorManifestFragmentDir;
+extern const std::string kSystemManifestFragmentDir;
+extern const std::string kOdmManifestFragmentDir;
+extern const std::string kProductManifestFragmentDir;
+extern const std::string kSystemExtManifestFragmentDir;
+extern const std::string kVendorLegacyManifest;
+extern const std::string kVendorLegacyMatrix;
+extern const std::string kSystemLegacyManifest;
+extern const std::string kSystemLegacyMatrix;
 
 // Convenience function to dump all files and directories that could be read
 // by calling Get(Framework|Device)(HalManifest|CompatibilityMatrix). The list

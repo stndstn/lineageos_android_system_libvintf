@@ -38,6 +38,7 @@ class KernelInfo {
 
     const KernelVersion& version() const;
     const std::map<std::string, std::string>& configs() const;
+    Level level() const;
 
     // mVersion = x'.y'.z', minLts = x.y.z,
     // match if x == x' , y == y' , and z <= z'.
@@ -59,7 +60,6 @@ class KernelInfo {
     friend class AssembleVintfImpl;
     friend class details::MockRuntimeInfo;
     friend struct details::StaticRuntimeInfo;
-    friend struct HalManifest;
     friend struct KernelInfoConverter;
     friend struct LibVintfTest;
     friend struct RuntimeInfoFetcher;
@@ -67,11 +67,6 @@ class KernelInfo {
 
     std::vector<const MatrixKernel*> getMatchedKernelVersionAndConfigs(
         const std::vector<const MatrixKernel*>& kernels, std::string* error) const;
-
-    // The kernel FCM version.
-    // This API is for internal use only, depending on the parent object that contains this
-    // KernelInfo. For public clients of libvintf, use VintfObject::getKernelLevel().
-    Level level() const;
 
     // x.y.z
     KernelVersion mVersion;

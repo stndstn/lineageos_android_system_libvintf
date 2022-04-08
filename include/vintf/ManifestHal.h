@@ -19,7 +19,6 @@
 #define ANDROID_VINTF_MANIFEST_HAL_H
 
 #include <map>
-#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -28,17 +27,15 @@
 
 #include "HalFormat.h"
 #include "HalInterface.h"
-#include "Level.h"
 #include "ManifestInstance.h"
 #include "TransportArch.h"
 #include "Version.h"
-#include "WithFileName.h"
 
 namespace android {
 namespace vintf {
 
 // A component of HalManifest.
-struct ManifestHal : public WithFileName {
+struct ManifestHal {
     using InstanceType = ManifestInstance;
 
     ManifestHal() = default;
@@ -66,19 +63,14 @@ struct ManifestHal : public WithFileName {
     inline Arch arch() const { return transportArch.arch; }
 
     inline const std::string& getName() const { return name; }
-
-    // Assume isValid().
     bool forEachInstance(const std::function<bool(const ManifestInstance&)>& func) const;
 
     bool isOverride() const { return mIsOverride; }
-    const std::optional<std::string>& updatableViaApex() const { return mUpdatableViaApex; }
 
     // When true, the existence of this <hal> tag means the component does NOT
     // exist on the device. This is useful for ODM manifests to specify that
     // a HAL is disabled on certain products.
     bool isDisabledHal() const;
-
-    Level getMaxLevel() const { return mMaxLevel; }
 
    private:
     friend struct LibVintfTest;
@@ -88,10 +80,14 @@ struct ManifestHal : public WithFileName {
 
     // Whether this hal is a valid one. Note that an empty ManifestHal
     // (constructed via ManifestHal()) is valid.
-    bool isValid(std::string* error = nullptr) const;
+    bool isValid() const;
 
     // Return all versions mentioned by <version>s and <fqname>s.
     void appendAllVersions(std::set<Version>* ret) const;
+
+    bool mIsOverride = false;
+    // Additional instances to <version> x <interface> x <instance>.
+    std::set<ManifestInstance> mAdditionalInstances;
 
     // insert instances to mAdditionalInstances.
     // Existing instances will be ignored.
@@ -102,16 +98,6 @@ struct ManifestHal : public WithFileName {
 
     // Verify instance before inserting.
     bool verifyInstance(const FqInstance& fqInstance, std::string* error = nullptr) const;
-
-    bool mIsOverride = false;
-    std::optional<std::string> mUpdatableViaApex;
-    // Additional instances to <version> x <interface> x <instance>.
-    std::set<ManifestInstance> mAdditionalInstances;
-
-    // Max level of this HAL. Only valid for framework manifest HALs.
-    // If set, HALs with max-level < target FCM version in device manifest is
-    // disabled.
-    Level mMaxLevel = Level::UNSPECIFIED;
 };
 
 } // namespace vintf
