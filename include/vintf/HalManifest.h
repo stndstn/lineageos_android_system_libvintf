@@ -41,6 +41,7 @@
 #include "Vndk.h"
 #include "WithFileName.h"
 #include "XmlFileGroup.h"
+#include "constants.h"
 
 namespace android {
 namespace vintf {
@@ -68,7 +69,7 @@ struct HalManifest : public HalGroup<ManifestHal>,
     // Construct a device HAL manifest.
     HalManifest() : mType(SchemaType::DEVICE) {}
 
-    bool add(ManifestHal&& hal, std::string* error = nullptr) override;
+    bool add(ManifestHal&& hal, std::string* error = nullptr);
     // Move all hals from another HalManifest to this.
     bool addAllHals(HalManifest* other, std::string* error = nullptr);
 
@@ -121,9 +122,6 @@ struct HalManifest : public HalGroup<ManifestHal>,
     // - otherwise the default value: /{system,vendor}/etc/<name>_V<major>_<minor>.xml
     // Otherwise if the <xmlfile> entry does not exist, "" is returned.
     std::string getXmlFilePath(const std::string& xmlFileName, const Version& version) const;
-
-    // Get metaversion of this manifest.
-    Version getMetaVersion() const;
 
     // Alternative to forEachInstance if you just need a set of instance names instead.
     std::set<std::string> getHidlInstances(const std::string& package, const Version& version,
@@ -232,6 +230,10 @@ struct HalManifest : public HalGroup<ManifestHal>,
 
     SchemaType mType;
     Level mLevel = Level::UNSPECIFIED;
+
+    // The metaversion on the source file if the HAL manifest is parsed from an XML file,
+    // Otherwise, the object is created programmatically, so default to libvintf meta version.
+    Version mSourceMetaVersion = kMetaVersion;
 
     // entries for device hal manifest only
     struct {
