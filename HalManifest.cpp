@@ -118,7 +118,11 @@ void HalManifest::removeHals(const std::string& name, size_t majorVer) {
         removeIf(existingVersions, [majorVer](const auto& existingVersion) {
             return existingVersion.majorVer == majorVer;
         });
-        return existingVersions.empty();
+        auto& existingManifestInstances = existingHal.mManifestInstances;
+        removeIf(existingManifestInstances, [majorVer](const auto& existingManifestInstance) {
+            return existingManifestInstance.version().majorVer == majorVer;
+        });
+        return existingVersions.empty() && existingManifestInstances.empty();
     });
 }
 
@@ -133,6 +137,11 @@ bool HalManifest::add(ManifestHal&& halToAdd, std::string* error) {
         for (const Version& versionToAdd : halToAdd.versions) {
             removeHals(halToAdd.name, versionToAdd.majorVer);
         }
+        // If there are <fqname> tags, remove all existing major versions that causes a conflict.
+        halToAdd.forEachInstance([this, &halToAdd](const auto& manifestInstanceToAdd) {
+            removeHals(halToAdd.name, manifestInstanceToAdd.version().majorVer);
+            return true;  // continue
+        });
     }
 
     if (!shouldAdd(halToAdd, error)) {
@@ -497,10 +506,6 @@ Level HalManifest::level() const {
     return mLevel;
 }
 
-Version HalManifest::getMetaVersion() const {
-    return kMetaVersion;
-}
-
 const Version &HalManifest::sepolicyVersion() const {
     CHECK(mType == SchemaType::DEVICE);
     return device.mSepolicyVersion;
@@ -618,7 +623,7 @@ bool HalManifest::insertInstance(const FqInstance& fqInstance, Transport transpo
     hal.format = format;
     hal.transportArch = TransportArch(transport, arch);
     if (!hal.insertInstance(fqInstance, error)) return false;
-    return add(std::move(hal));
+    return add(std::move(hal), error);
 }
 
 bool HalManifest::empty() const {
