@@ -180,6 +180,7 @@ struct MutateNodeParam {
 struct BuildObjectParam {
     std::string* error;
     Version metaVersion;
+    std::string fileName;
 };
 
 template <typename Object>
@@ -232,7 +233,17 @@ struct XmlNodeConverter {
         // CompatibilityMatrixConverter fills in metaversion and pass down to children.
         // For other nodes, we don't know metaversion of the original XML, so just leave empty
         // for maximum backwards compatibility.
-        bool ret = (*this)(o, getRootChild(doc), BuildObjectParam{error, {}});
+        BuildObjectParam buildObjectParam{error, {}, {}};
+        // Pass down filename for the current XML document.
+        if constexpr (std::is_base_of_v<WithFileName, Object>) {
+            // Get the last filename in case `o` keeps the list of filenames
+            std::string_view fileName{o->fileName()};
+            if (auto pos = fileName.rfind(':'); pos != fileName.npos) {
+                fileName.remove_prefix(pos + 1);
+            }
+            buildObjectParam.fileName = std::string(fileName);
+        }
+        bool ret = (*this)(o, getRootChild(doc), buildObjectParam);
         deleteDocument(doc);
         return ret;
     }
@@ -612,6 +623,10 @@ struct MatrixHalConverter : public XmlNodeConverter<MatrixHal> {
                     const MutateNodeParam& param) const override {
         appendAttr(root, "format", object.format);
         appendAttr(root, "optional", object.optional);
+        // Only include update-via-apex if enabled
+        if (object.updatableViaApex) {
+            appendAttr(root, "updatable-via-apex", object.updatableViaApex);
+        }
         appendTextElement(root, "name", object.name, param.d);
         if (object.format == HalFormat::AIDL) {
             // By default, buildObject() assumes a <version>0</version> tag if no <version> tag
@@ -632,6 +647,8 @@ struct MatrixHalConverter : public XmlNodeConverter<MatrixHal> {
         if (!parseOptionalAttr(root, "format", HalFormat::HIDL, &object->format, param.error) ||
             !parseOptionalAttr(root, "optional", false /* defaultValue */, &object->optional,
                                param.error) ||
+            !parseOptionalAttr(root, "updatable-via-apex", false /* defaultValue */,
+                               &object->updatableViaApex, param.error) ||
             !parseTextElement(root, "name", &object->name, param.error) ||
             !parseChildren(root, HalInterfaceConverter{}, &interfaces, param)) {
             return false;
@@ -813,6 +830,27 @@ struct ManifestHalConverter : public XmlNodeConverter<ManifestHal> {
             return false;
         }
 
+        std::string_view apexName = parseApexName(param.fileName);
+        if (!apexName.empty()) {
+            if (object->mUpdatableViaApex.has_value()) {
+                // When defined in APEX, updatable-via-apex can be either
+                // - ""(empty)  : the HAL isn't updatable even if it's in APEX
+                // - {apex name}: the HAL is updtable via the current APEX
+                const std::string& updatableViaApex = object->mUpdatableViaApex.value();
+                if (!updatableViaApex.empty() && apexName.compare(updatableViaApex) != 0) {
+                    *param.error = "Invalid APEX HAL " + object->name + ": updatable-via-apex " +
+                                   updatableViaApex + " doesn't match with the defining APEX " +
+                                   std::string(apexName) + "\n";
+                    return false;
+                }
+            } else {
+                // Set updatable-via-apex to the defining APEX when it's not set explicitly.
+                // This should be set before calling insertInstances() which copies the current
+                // value to ManifestInstance.
+                object->mUpdatableViaApex = apexName;
+            }
+        }
+
         switch (object->format) {
             case HalFormat::HIDL: {
                 if (!parseChildren(root, VersionConverter{}, &object->versions, param))
@@ -895,6 +933,15 @@ struct ManifestHalConverter : public XmlNodeConverter<ManifestHal> {
         bool convertedInstancesIntoFqnames = false;
         for (const auto& v : object->versions) {
             for (const auto& intf : interfaces) {
+                if (param.metaVersion >= kMetaVersionNoHalInterfaceInstance &&
+                    (object->format == HalFormat::HIDL || object->format == HalFormat::AIDL) &&
+                    !intf.hasAnyInstance()) {
+                    *param.error +=
+                        "<hal> " + object->name + " <interface> " + intf.name() +
+                        " has no <instance>. Either specify <instance> or, "
+                        "preferably, specify <fqname> and delete <version> and <interface>.";
+                    return false;
+                }
                 bool cont = intf.forEachInstance(
                     [&v, &fqInstances, &convertedInstancesIntoFqnames, &object, &param](
                         const auto& interface, const auto& instance, bool /* isRegex */) {
@@ -989,12 +1036,14 @@ struct ManifestHalConverter : public XmlNodeConverter<ManifestHal> {
             }
         }
 
-        // TODO(b/148808037): Require !fqInstancesToInsert.empty() for HIDL & AIDL >=
-        // kMetaVersionNoHalInterfaceInstance.
+        if (param.metaVersion >= kMetaVersionNoHalInterfaceInstance &&
+            (object->format == HalFormat::HIDL || object->format == HalFormat::AIDL) &&
+            fqInstancesToInsert.empty()) {
+            *param.error = "<hal> " + object->name + " has no instance. Fix by adding <fqname>.";
+            return false;
+        }
 
-        // TODO(b/148808037): Do not allowMajorVersionDup on manifests
-        // >= kMetaVersionNoHalInterfaceInstance.
-        bool allowMajorVersionDup = true;
+        bool allowMajorVersionDup = param.metaVersion < kMetaVersionNoHalInterfaceInstance;
         if (!object->insertInstances(fqInstancesToInsert, allowMajorVersionDup, param.error)) {
             return false;
         }

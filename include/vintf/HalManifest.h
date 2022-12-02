@@ -185,6 +185,10 @@ struct HalManifest : public HalGroup<ManifestHal>,
     // (instance in matrix) => (instance in manifest).
     std::vector<std::string> checkIncompatibleHals(const CompatibilityMatrix& mat) const;
 
+    // Return vector of instance names that are defined in an APEX that are not
+    // specified as updatable apex hals in the compatibility matrix.
+    std::vector<std::string> checkApexHals(const CompatibilityMatrix& mat) const;
+
     void removeHals(const std::string& name, size_t majorVer);
 
     // Returns a list of instance names that are in this manifest but
@@ -224,6 +228,11 @@ struct HalManifest : public HalGroup<ManifestHal>,
     // Helper for shouldAdd(). Check if |hal| has a conflicting major version with this. Return
     // false if hal should not be added, and set |error| accordingly. Return true if check passes.
     bool addingConflictingMajorVersion(const ManifestHal& hal, std::string* error) const;
+
+    // Helper for shouldAdd(). Check if |hal| has a conflicting major version in <fqname> with this.
+    // Return false if hal should not be added, and set |error| accordingly. Return true if check
+    // passes.
+    bool addingConflictingFqInstance(const ManifestHal& hal, std::string* error) const;
 
     // Inferred kernel level.
     Level inferredKernelLevel() const;
